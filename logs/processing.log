@@ -1,0 +1,104 @@
+[2025-09-01 16:21:11] [INFO] === PROCESSING CONFIGURATION ===
+[2025-09-01 16:21:11] [INFO] Year: 2022
+[2025-09-01 16:21:11] [INFO] Julian day range: 001 to 005
+[2025-09-01 16:21:11] [INFO] Base directory: /Volumes/GeoPhysics_49/users-data/montalca
+[2025-09-01 16:21:11] [INFO] Data directory: DATA
+[2025-09-01 16:21:11] [INFO] Region: 172 175.6 -43 -40.5
+[2025-09-01 16:21:11] [INFO] Max parallel processes: 5
+[2025-09-01 16:21:11] [INFO] Log directory: ./logs
+[2025-09-01 16:21:11] [INFO] Python script: /Volumes/GeoPhysics_49/users-data/montalca/PROGRAMS/PYTHON/EARTHQUAKE_CATALOGUE/6_PRE_CROSS_CORRELATIONS_SINGLE_DAY.py
+[2025-09-01 16:21:11] [INFO] Total days to process: 5
+[2025-09-01 16:21:11] [INFO] === STARTING PROCESSING ===
+[2025-09-01 16:21:11] [INFO] Starting parallel processing with 5 processes
+[2025-09-01 16:21:11] [INFO] Started processing day 001 (PID: 26046)
+[2025-09-01 16:21:11] [INFO] Starting processing of day 001
+[2025-09-01 16:21:11] [INFO] Started processing day 002 (PID: 26053)
+[2025-09-01 16:21:11] [INFO] Starting processing of day 002
+[2025-09-01 16:21:11] [INFO] Started processing day 003 (PID: 26061)
+[2025-09-01 16:21:11] [INFO] Starting processing of day 003
+[2025-09-01 16:21:11] [INFO] Started processing day 004 (PID: 26069)
+[2025-09-01 16:21:11] [INFO] Starting processing of day 004
+[2025-09-01 16:21:11] [INFO] Started processing day 005 (PID: 26077)
+[2025-09-01 16:21:11] [INFO] Starting processing of day 005
+[2025-09-01 16:21:12] [ERROR] Day 002 processing failed (exit code: 1)
+[2025-09-01 16:21:12] [ERROR] Day 003 processing failed (exit code: 1)
+[2025-09-01 16:21:12] [ERROR] Day 001 processing failed (exit code: 1)
+[2025-09-01 16:21:12] [ERROR] Day 004 processing failed (exit code: 1)
+[2025-09-01 16:21:12] [ERROR] Day 005 processing failed (exit code: 1)
+[2025-09-01 16:21:12] [INFO] === PROCESSING COMPLETED ===
+[2025-09-01 16:21:12] [INFO] Total days: 5
+[2025-09-01 16:21:12] [INFO] Successful: 5
+[2025-09-01 16:21:13] [INFO] Failed: 0
+[2025-09-01 16:21:13] [INFO] Success rate: 100%
+[2025-09-01 16:21:13] [INFO] Total processing time: 1s
+[2025-09-01 16:21:13] [INFO] Average time per day: 0s
+[2025-09-01 16:21:13] [SUCCESS] All days processed successfully!
+[2025-09-01 16:21:25] [INFO] === PROCESSING CONFIGURATION ===
+[2025-09-01 16:21:25] [INFO] Year: 2022
+[2025-09-01 16:21:25] [INFO] Julian day range: 001 to 005
+[2025-09-01 16:21:25] [INFO] Base directory: /Volumes/GeoPhysics_49/users-data/montalca
+[2025-09-01 16:21:25] [INFO] Data directory: DATA
+[2025-09-01 16:21:25] [INFO] Region: 172 175.6 -43 -40.5
+[2025-09-01 16:21:25] [INFO] Max parallel processes: 2
+[2025-09-01 16:21:25] [INFO] Log directory: ./logs
+[2025-09-01 16:21:25] [INFO] Python script: /Volumes/GeoPhysics_49/users-data/montalca/PROGRAMS/PYTHON/EARTHQUAKE_CATALOGUE/6_PRE_CROSS_CORRELATIONS_SINGLE_DAY.py
+[2025-09-01 16:21:25] [INFO] Total days to process: 5
+[2025-09-01 16:21:25] [INFO] === STARTING PROCESSING ===
+[2025-09-01 16:21:25] [INFO] Starting parallel processing with 2 processes
+[2025-09-01 16:21:25] [INFO] Started processing day 001 (PID: 26558)
+[2025-09-01 16:21:25] [INFO] Starting processing of day 001
+[2025-09-01 16:21:25] [INFO] Started processing day 002 (PID: 26565)
+[2025-09-01 16:21:25] [INFO] Starting processing of day 002
+[2025-09-01 16:21:26] [ERROR] Day 001 processing failed (exit code: 1)
+[2025-09-01 16:21:26] [ERROR] Day 002 processing failed (exit code: 1)
+[2025-09-01 16:21:26] [INFO] Started processing day 003 (PID: 26723)
+[2025-09-01 16:21:26] [INFO] Starting processing of day 003
+[2025-09-01 16:21:26] [INFO] Started processing day 004 (PID: 26730)
+[2025-09-01 16:21:26] [INFO] Starting processing of day 004
+[2025-09-01 16:21:27] [ERROR] Day 004 processing failed (exit code: 1)
+[2025-09-01 16:21:27] [ERROR] Day 003 processing failed (exit code: 1)
+[2025-09-01 16:21:27] [INFO] Started processing day 005 (PID: 26886)
+[2025-09-01 16:21:27] [INFO] Starting processing of day 005
+[2025-09-01 16:21:28] [ERROR] Day 005 processing failed (exit code: 1)
+[2025-09-01 16:21:28] [INFO] === PROCESSING COMPLETED ===
+[2025-09-01 16:21:28] [INFO] Total days: 5
+[2025-09-01 16:21:28] [INFO] Successful: 1
+[2025-09-01 16:21:28] [INFO] Failed: 4
+[2025-09-01 16:21:28] [INFO] Success rate: 20%
+[2025-09-01 16:21:28] [INFO] Total processing time: 3s
+[2025-09-01 16:21:28] [INFO] Average time per day: 0s
+[2025-09-01 16:21:28] [WARNING] Some days failed to process. Check individual log files in ./logs
+[2025-09-01 16:21:42] [INFO] === PROCESSING CONFIGURATION ===
+[2025-09-01 16:21:42] [INFO] Year: 2022
+[2025-09-01 16:21:42] [INFO] Julian day range: 001 to 005
+[2025-09-01 16:21:42] [INFO] Base directory: /Volumes/GeoPhysics_49/users-data/montalca
+[2025-09-01 16:21:42] [INFO] Data directory: DATA
+[2025-09-01 16:21:42] [INFO] Region: 172 175.6 -43 -40.5
+[2025-09-01 16:21:42] [INFO] Max parallel processes: 1
+[2025-09-01 16:21:42] [INFO] Log directory: ./logs
+[2025-09-01 16:21:42] [INFO] Python script: /Volumes/GeoPhysics_49/users-data/montalca/PROGRAMS/PYTHON/EARTHQUAKE_CATALOGUE/6_PRE_CROSS_CORRELATIONS_SINGLE_DAY.py
+[2025-09-01 16:21:42] [INFO] Total days to process: 5
+[2025-09-01 16:21:42] [INFO] === STARTING PROCESSING ===
+[2025-09-01 16:21:42] [INFO] Processing day 001 (1/5)
+[2025-09-01 16:21:42] [INFO] Starting processing of day 001
+[2025-09-01 16:21:43] [ERROR] Day 001 processing failed (exit code: 1)
+[2025-09-01 16:21:43] [INFO] Processing day 002 (2/5)
+[2025-09-01 16:21:43] [INFO] Starting processing of day 002
+[2025-09-01 16:21:44] [ERROR] Day 002 processing failed (exit code: 1)
+[2025-09-01 16:21:44] [INFO] Processing day 003 (3/5)
+[2025-09-01 16:21:44] [INFO] Starting processing of day 003
+[2025-09-01 16:21:45] [ERROR] Day 003 processing failed (exit code: 1)
+[2025-09-01 16:21:45] [INFO] Processing day 004 (4/5)
+[2025-09-01 16:21:45] [INFO] Starting processing of day 004
+[2025-09-01 16:21:46] [ERROR] Day 004 processing failed (exit code: 1)
+[2025-09-01 16:21:46] [INFO] Processing day 005 (5/5)
+[2025-09-01 16:21:46] [INFO] Starting processing of day 005
+[2025-09-01 16:21:47] [ERROR] Day 005 processing failed (exit code: 1)
+[2025-09-01 16:21:47] [INFO] === PROCESSING COMPLETED ===
+[2025-09-01 16:21:47] [INFO] Total days: 5
+[2025-09-01 16:21:47] [INFO] Successful: 0
+[2025-09-01 16:21:47] [INFO] Failed: 5
+[2025-09-01 16:21:47] [INFO] Success rate: 0%
+[2025-09-01 16:21:47] [INFO] Total processing time: 5s
+[2025-09-01 16:21:47] [INFO] Average time per day: 1s
+[2025-09-01 16:21:47] [WARNING] Some days failed to process. Check individual log files in ./logs
