@@ -1,4 +1,0 @@
-/usr/local/lib/python3.8/dist-packages/obspy/io/stationxml/core.py:96: UserWarning: The StationXML file has version 1.2, ObsPy can read versions (1.0, 1.1). Proceed with caution.
-  warnings.warn("The StationXML file has version %s, ObsPy can "
-Loaded inventory with 3 networks
-Error: Year path does not exist: /Volumes/GeoPhysics_49/users-data/montalca/DATA/2022
