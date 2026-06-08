@@ -682,7 +682,7 @@ def magnitude_inversion(
     x_width = n_new_events + n_seed_ids + 1
     
     # OPTIMIZED: Use sparse.lil_matrix instead of np.zeros (99.97% of values are zero!)
-    # ORIGINAL CODE (COMMENTED OUT - created 80GB matrix):
+    # ORIGINAL CODE (COMMENTED OUT):
     # X = np.zeros((total_length, x_width), dtype=np.float64)
     X = sparse.lil_matrix((total_length, x_width), dtype=np.float32)
 
