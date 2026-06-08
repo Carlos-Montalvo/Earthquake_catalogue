@@ -53,11 +53,12 @@ for event in cat:
         pass
  
     # Calidad
-    rms, nphases, gap, dist_km = None, None, None, None
+    rms, nphases, nstations, gap, dist_km = None, None, None, None, None
     if origin.time_errors and origin.time_errors.uncertainty:
         rms = origin.time_errors.uncertainty
     if origin.quality:
         nphases = origin.quality.used_phase_count
+        nstations = origin.quality.used_station_count
         gap = origin.quality.azimuthal_gap
         if origin.quality.minimum_distance is not None:
             dist_km = origin.quality.minimum_distance / 1000.0
@@ -81,6 +82,7 @@ for event in cat:
         'depth_km':     origin.depth / 1000.0 if origin.depth is not None else None,
         'rms':          rms,
         'nphases':      nphases,
+        'nstations':    nstations,
         'gap':          gap,
         'dist_km':      dist_km,
         'picks':        picks_list,
