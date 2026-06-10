@@ -1,4 +1,5 @@
 import glob
+from os import makedirs
 from datetime import datetime
 from os.path import join,exists
 import pandas as pd
@@ -196,138 +197,138 @@ def merge_quakeml_files(input_dir, output_file):
     # Write the final merged catalog to a new QuakeML file
     master_catalog.write(output_file, format="QUAKEML")
     
-def nll_quakeml_to_csv_split(quakeml_file, output_dir):
-    """
-    Convert QuakeML to two CSV files: event catalog and phase catalog.
-    
-    Event catalog: one record per event with magnitudes and focal mechanism
-    Phase catalog: one record per pick/arrival for each event
-    """
+def nll_quakeml_to_csv_split(quakeml_file, output_dir,
+                            station_xml="/Volumes/GeoPhysics_49/users-data/montalca/STATIONS/ALL_STATIONS.xml",
+                            taup_model="/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz"):
     from obspy.geodetics import gps2dist_azimuth
+    from obspy.taup import TauPyModel
+    from obspy import read_inventory
     import os
-    
+
+    print(f">>> Leyendo archivo: {quakeml_file}")
     catalog = read_events(quakeml_file)
-    
+    print(f">>> Eventos cargados: {len(catalog)}")
+
+    # Cargar inventario y modelo UNA sola vez fuera del loop
+    print(f">>> Cargando inventario: {station_xml}")
+    inventory = read_inventory(station_xml)
+    # taup_model = TauPyModel(model="iasp91")
+
+    # Construir lookup dict: station_code -> (lat, lon)
+    station_coords = {}
+    for net in inventory:
+        for sta in net:
+            station_coords[sta.code] = (sta.latitude, sta.longitude)
+    print(f">>> Estaciones cargadas: {len(station_coords)}")
+
     event_records = []
     phase_records = []
-    
+
     for event in catalog:
-        # Get origin, magnitudes, focal mechanism
         origin = event.preferred_origin() or (event.origins[0] if event.origins else None)
         if origin is None:
             continue
-        
-        # Get first and second magnitudes
-        mag1 = event.preferred_magnitude() or (event.magnitudes[0] if event.magnitudes else None)
-        mag2 = event.magnitudes[1] if len(event.magnitudes) > 1 else None
-        
-        # Add dummy magnitude if none exists
+
+        preferred_mag_id = str(event.preferred_magnitude_id) if event.preferred_magnitude_id else None
+        mag1 = None
+        if preferred_mag_id:
+            for m in event.magnitudes:
+                if str(m.resource_id) == preferred_mag_id:
+                    mag1 = m
+                    break
+        if mag1 is None and event.magnitudes:
+            mag1 = event.magnitudes[0]
+
         if mag1 is None:
             class DummyMagnitude:
-                def __init__(self):
-                    self.mag = 3.0
-                    self.magnitude_type = 'ML'
+                mag = 2.0
+                magnitude_type = 'ML'
             mag1 = DummyMagnitude()
-        
-        # Get focal mechanism
-        fm = event.preferred_focal_mechanism() or (event.focal_mechanisms[0] if event.focal_mechanisms else None)
-        
-        event_id = str(event.resource_id).split('/')[-1]  # Extract just the ID part
-        
-        # Get data_id from event time (YYYY_JDD_HHMMSS format)
+
+        event_id = str(event.resource_id).split('/')[-1]
         data_id = f"{origin.time.year}_{origin.time.julday:03d}_{origin.time.hour:02d}{origin.time.minute:02d}{origin.time.second:02d}"
-        
-        # Extract focal mechanism parameters
-        strike, dip, slip = None, None, None
-        if fm and fm.nodal_planes and fm.nodal_planes.nodal_plane_1:
-            np1 = fm.nodal_planes.nodal_plane_1
-            strike = np1.strike
-            dip = np1.dip
-            slip = np1.rake
-        
-        # Event record
+
         event_record = {
             'event_id': event_id,
-            'data_id': data_id,
-            'jst': origin.time.isoformat() if origin.time else None,
-            'lat': origin.latitude,
-            'lon': origin.longitude,
-            'dep': origin.depth / 1000.0 if origin.depth is not None else None,
-            'mag': mag1.mag if mag1 else None,
-            'tmag': mag1.magnitude_type if mag1 else None,
-            'mag2': mag2.mag if mag2 else None,
-            'tmag2': mag2.magnitude_type if mag2 else None,
-            'strike': strike,
-            'dip': dip,
-            'slip': slip,
-            'dist': None  # Placeholder for hypocentral distance
+            'data_id':  data_id,
+            'jst':      origin.time.isoformat() if origin.time else None,
+            'lat':      origin.latitude,
+            'lon':      origin.longitude,
+            'dep':      origin.depth / 1000.0 if origin.depth is not None else None,
+            'mag':      mag1.mag if mag1 else None,
+            'tmag':     mag1.magnitude_type if mag1 else None,
         }
         event_records.append(event_record)
-        
-        # Phase records (one per pick/arrival)
+
+        # Lookup arrivals por pick_id
+        arrival_lookup = {str(a.pick_id): a for a in origin.arrivals}
+
+        dep_km = origin.depth / 1000.0 if origin.depth is not None else 0.0
+
         for pick in event.picks:
             if pick.waveform_id is None:
                 continue
-            
-            sta_code = pick.waveform_id.station_code
+
+            sta_code  = pick.waveform_id.station_code
             phase_type = pick.phase_hint if pick.phase_hint else None
-            polarity = pick.polarity if pick.polarity else None
-            
-            # Try to get distance from arrivals
-            distance = None
+            polarity   = str(pick.polarity) if pick.polarity else None
+
+            # Distance desde arrival (en grados)
+            arrival = arrival_lookup.get(str(pick.resource_id))
+            distance = arrival.distance if arrival and arrival.distance is not None else None
+
+            # Azimuth: evento -> estación
             azimuth = None
+            sta_coords = station_coords.get(sta_code)
+            if sta_coords and origin.latitude is not None and origin.longitude is not None:
+                _, az, _ = gps2dist_azimuth(
+                    origin.latitude, origin.longitude,
+                    sta_coords[0],   sta_coords[1]
+                )
+                azimuth = round(az, 4)
+
+            # Takeoff angle via TauPy
             takeoff = None
-            for arrival in origin.arrivals:
-                if arrival.pick_id == pick.resource_id:
-                    distance = arrival.distance if arrival.distance else None
-                    azimuth = arrival.azimuth if arrival.azimuth else None
-                    takeoff = arrival.takeoff_angle if arrival.takeoff_angle else None
-                    break
-            
-            # Create phase_record with dynamic time column based on phase type
+            if distance is not None and phase_type in ('P', 'S'):
+                try:
+                    ray_paths = taup_model.get_ray_paths(
+                        source_depth_in_km=dep_km,
+                        distance_in_degree=distance,
+                        phase_list=[phase_type]
+                    )
+                    takeoff = round(ray_paths[0].takeoff_angle, 4) if ray_paths else None
+                except Exception:
+                    takeoff = None
+
+            pick_time = pick.time.isoformat() if pick.time else None
             phase_record = {
                 'event_id': event_id,
-                'sta': sta_code,
-                'phase': phase_type,
+                'sta':      sta_code,
+                'phase':    phase_type,
                 'polarity': polarity,
                 'distance': distance,
-                'azimuth': azimuth,
-                'takeoff': takeoff,
-                'network': pick.waveform_id.network_code if pick.waveform_id else None,
-                'channel': pick.waveform_id.channel_code if pick.waveform_id else None
+                'azimuth':  azimuth,
+                'takeoff':  takeoff,
+                'network':  pick.waveform_id.network_code if pick.waveform_id else None,
+                'channel':  pick.waveform_id.channel_code if pick.waveform_id else None,
+                'ptime':    pick_time if phase_type == 'P' else None,
+                'stime':    pick_time if phase_type == 'S' else None,
             }
-            
-            # Add time as ptime or stime depending on phase
-            pick_time = pick.time.isoformat() if pick.time else None
-            if phase_type == 'P':
-                phase_record['ptime'] = pick_time
-                phase_record['stime'] = None
-            elif phase_type == 'S':
-                phase_record['ptime'] = None
-                phase_record['stime'] = pick_time
-            else:
-                # Unknown phase type, put in ptime by default
-                phase_record['ptime'] = pick_time
-                phase_record['stime'] = None
-            
             phase_records.append(phase_record)
-    
-    # Create output directory if it doesn't exist
+
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
-    # Save event catalog
+
     df_events = pd.DataFrame(event_records)
     event_csv_path = join(output_dir, 'event_catalogue.csv')
     df_events.to_csv(event_csv_path, index=False)
     print(f"✓ Event catalog saved: {event_csv_path} ({len(df_events)} events)")
-    
-    # Save phase catalog
+
     df_phases = pd.DataFrame(phase_records)
     phase_csv_path = join(output_dir, 'phase_catalogue.csv')
     df_phases.to_csv(phase_csv_path, index=False)
     print(f"✓ Phase catalog saved: {phase_csv_path} ({len(df_phases)} picks)")
-    
+
     return df_events, df_phases
 
 ### DIRECTORIES ###
@@ -339,7 +340,7 @@ rpnet_dir = join(ctlg_dir, 'RPNET')
 gn_file = join(ctlg_dir,'GeoNet_CMT_solutions_corregido.csv')
 
 # Flags: mode = 1 for merging QuakeML files, mode = 2 for converting GeoNet CSV to QuakeML, mode = 3 for splitting QuakeML to CSV
-mode = 1
+mode = 3
 
 if mode == 1:
     merge_quakeml_files(amp_dir, join(mag_dir, 'JAN24_SEP25.xml'))
@@ -347,7 +348,7 @@ elif mode == 2:
     convert_geonet_to_quakeml(gn_file, join(mag_dir,'GeoNet_CMT_solutions.xml'))
 elif mode == 3:
     # Example: Convert a QuakeML file to event and phase catalogs
-    quakeml_input = join(mag_dir, 'JAN24_SEP25.xml')  # Change this to your QuakeML file
+    quakeml_input = join(mag_dir, 'JAN24_SEP25_MAGNITUDES.xml')  # Change this to your QuakeML file
     if exists(quakeml_input):
         df_events, df_phases = nll_quakeml_to_csv_split(quakeml_input, rpnet_dir)
     else:

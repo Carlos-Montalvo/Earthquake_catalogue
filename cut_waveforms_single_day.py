@@ -571,8 +571,7 @@ def event_already_processed(event, rpnet_output_dir, station_groups=None, min_co
     return False
 
 def estimate_p_time(origin_time, event_lat, event_lon, event_dep_km, sta_lat, sta_lon, sta_elv_m,
-                    # model='/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz'):
-                    model='iasp91'):
+                    model='/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz'):
     """
     Estima el tiempo de llegada de la onda P usando TauP cuando no hay pick de P.
     Intenta múltiples modelos como fallback.
@@ -583,9 +582,9 @@ def estimate_p_time(origin_time, event_lat, event_lon, event_dep_km, sta_lat, st
     # Modelos a intentar en orden
     models_to_try = [model]  # Primero el custom
     if os.path.exists(model):
-        models_to_try = [model,'iasp91','ak135']
+        models_to_try = [model,'ak135','iasp91']
     else:
-        models_to_try = ['iasp91','ak135']
+        models_to_try = ['ak135','iasp91']
     
     try:
         dist_deg = locations2degrees(event_lat, event_lon, sta_lat, sta_lon)
@@ -611,8 +610,7 @@ def estimate_p_time(origin_time, event_lat, event_lon, event_dep_km, sta_lat, st
     return None, None
 
 def estimate_s_time(origin_time, event_lat, event_lon, event_dep_km, sta_lat, sta_lon, sta_elv_m,
-                    # model='/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz'):
-                    model='iasp91'):
+                    model='/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz'):
     """
     Estima el tiempo de llegada de la onda S usando TauP cuando no hay pick de S.
     Intenta múltiples modelos como fallback.
@@ -623,9 +621,9 @@ def estimate_s_time(origin_time, event_lat, event_lon, event_dep_km, sta_lat, st
     # Modelos a intentar en orden
     models_to_try = [model]  # Primero el custom
     if os.path.exists(model):
-        models_to_try = [model,'iasp91','ak135']
+        models_to_try = [model,'ak135','iasp91']
     else:
-        models_to_try = ['iasp91','ak135']
+        models_to_try = ['ak135','iasp91']
     
     try:
         dist_deg = locations2degrees(event_lat, event_lon, sta_lat, sta_lon)
