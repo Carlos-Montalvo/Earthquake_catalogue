@@ -651,8 +651,7 @@ def estimate_s_time(origin_time, event_lat, event_lon, event_dep_km, sta_lat, st
 
 def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, year,
                       pre_p=3.0, post_s=20.0,
-                    #   taup_model='/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz'):
-                      taup_model='iasp91'):
+                      taup_model='/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz'):
     """
     Corta ventanas desde p_time - pre_p hasta s_time + post_s por estación para RPNet.
     Incluye componente vertical (Z) y mejor horizontal para ratio S/P.
