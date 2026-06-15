@@ -245,8 +245,8 @@ def find_matching_events(
     catalog_1: Catalog, 
     catalog_2: Catalog, 
     time_difference: float = 15.0,
-    epicentral_difference: float = 150.0,
-    depth_difference: float = 200.0,
+    epicentral_difference: float = 50.0,
+    depth_difference: float = 100.0,
     magnitude_type: str = None,
 ) -> dict:
     """
@@ -549,9 +549,9 @@ def decay_plot(
 def magnitude_inversion(
     new_catalog: Catalog,
     callibration_catalog: Catalog,
-    time_difference: float = 5.0,
-    epicentral_difference: float = 20.0,
-    depth_difference: float = 40.0,
+    time_difference: float = 15.0,
+    epicentral_difference: float = 50.0,
+    depth_difference: float = 100.0,
     magnitude_type: str = "Mw",
     geometric_parameter: float = 1.0,
     magnitude_weight: float = 1.0,
@@ -683,8 +683,8 @@ def magnitude_inversion(
     
     # OPTIMIZED: Use sparse.lil_matrix instead of np.zeros (99.97% of values are zero!)
     # ORIGINAL CODE (COMMENTED OUT):
-    # X = np.zeros((total_length, x_width), dtype=np.float64)
-    X = sparse.lil_matrix((total_length, x_width), dtype=np.float32)
+    X = np.zeros((total_length, x_width), dtype=np.float64)
+    # X = sparse.lil_matrix((total_length, x_width), dtype=np.float32)
 
     # Fill with frequency * distance
     if frequency_dependent:
@@ -693,9 +693,10 @@ def magnitude_inversion(
         freq_dist = frequency * slantdist
     
     # OPTIMIZED: Assign row-by-row for sparse matrix efficiency
-    # ORIGINAL (COMMENTED): X[0:n_observations, n_new_events] = (1 / mag_data.period) * slantdist
+    # ORIGINAL (COMMENTED): 
     for row_idx in range(n_observations):
-        X[row_idx, n_new_events] = freq_dist[row_idx]
+        X[0:n_observations, n_new_events] = (1 / mag_data.period) * slantdist
+        # X[row_idx, n_new_events] = freq_dist[row_idx]
 
     # Convert to numpy arrays for faster indexing
     event_id_array = mag_data.event_id.to_numpy()
@@ -703,19 +704,21 @@ def magnitude_inversion(
 
     # Fill with ones where an amplitude measurement matches an event
     # OPTIMIZED: Use np.where for vectorized boolean indexing (100x faster)
-    # ORIGINAL (COMMENTED): X[0:n_observations, i] = mag_data.event_id == used_event_id
-    for i, used_event_id in enumerate(used_event_ids):    
-        matches = np.where(event_id_array == used_event_id)[0]
-        for row_idx in matches:
-            X[row_idx, i] = 1.0
+    # ORIGINAL (COMMENTED):
+    for i, used_event_id in enumerate(used_event_ids):
+        X[0:n_observations, i] = mag_data.event_id == used_event_id
+        # matches = np.where(event_id_array == used_event_id)[0]
+        # for row_idx in matches:
+        #     X[row_idx, i] = 1.0
 
     # Fill with ones where a seed id is used for that event.
     # OPTIMIZED: Use np.where for vectorized boolean indexing
-    # ORIGINAL (COMMENTED): X[0:n_observations, n_new_events + i + 1] = mag_data.seed_id == seed_id
+    # ORIGINAL (COMMENTED):
     for i, seed_id in enumerate(used_seed_ids):
-        matches = np.where(seed_id_array == seed_id)[0]
-        for row_idx in matches:
-            X[row_idx, n_new_events + i + 1] = 1.0
+        X[0:n_observations, n_new_events + i + 1] = mag_data.seed_id == seed_id
+        # matches = np.where(seed_id_array == seed_id)[0]
+        # for row_idx in matches:
+        #     X[row_idx, n_new_events + i + 1] = 1.0
 
     # Fill with ones where events are matched
     for j, callibration_id in enumerate(callibration_ids):
@@ -724,19 +727,19 @@ def magnitude_inversion(
                 comparison_events[used_event_id] == callibration_id:
                  X[n_observations + j, k] = magnitude_weight
     
-    # OPTIMIZED: Convert sparse matrix to CSR (Compressed Sparse Row) format for efficient operations
-    print(f"  Converting sparse matrix to dense for solver...")
-    X_csr = X.tocsr()
-    X = X_csr.toarray().astype(np.float64)  # Convert to dense for scipy.linalg functions
-    print(f"  X matrix shape: {X.shape}, memory used: ~{X.nbytes / 1e9:.2f} GB (original was ~80 GB)")
+    # # OPTIMIZED: Convert sparse matrix to CSR (Compressed Sparse Row) format for efficient operations
+    # print(f"  Converting sparse matrix to dense for solver...")
+    # X_csr = X.tocsr()
+    # X = X_csr.toarray().astype(np.float64)  # Convert to dense for scipy.linalg functions
+    # print(f"  X matrix shape: {X.shape}, memory used: ~{X.nbytes / 1e9:.2f} GB (original was ~80 GB)")
     
-    # OPTIMIZED: Free sparse matrix reference
-    del X_csr
+    # # OPTIMIZED: Free sparse matrix reference
+    # del X_csr
     
-    # OPTIMIZED: Clean up large temporary arrays to reduce memory pressure
-    print(f"  Freeing temporary arrays from memory...")
-    del event_id_array, seed_id_array, amplitudes, slantdist, freq_dist
-    gc.collect()  # Force garbage collection immediately
+    # # OPTIMIZED: Clean up large temporary arrays to reduce memory pressure
+    # print(f"  Freeing temporary arrays from memory...")
+    # del event_id_array, seed_id_array, amplitudes, slantdist, freq_dist
+    # gc.collect()  # Force garbage collection immediately
 
     ################################# Solve ####################################
     print("########## Solving inversion ##########")
@@ -753,15 +756,15 @@ def magnitude_inversion(
    
     # Verify matrix inverse with relaxed tolerance (1e-2 instead of 1e-3)
     # More permissive due to numerical precision in large systems
-    check1 = np.allclose(condition_inv @ conditionX, _id, atol=1e-2)
+    check1 = np.allclose(condition_inv @ conditionX, _id, atol=1e-3)
     check2 = np.allclose(
-        linalg.lstsq(u, linalg.lstsq(l, conditionX)[0])[0], _id, atol=1e-2)
+        linalg.lstsq(u, linalg.lstsq(l, conditionX)[0])[0], _id, atol=1e-3)
     
     if not check1 or not check2:
         # Calculate actual error for debugging
         error1 = np.max(np.abs(condition_inv @ conditionX - _id))
         error2 = np.max(np.abs(linalg.lstsq(u, linalg.lstsq(l, conditionX)[0])[0] - _id))
-        print(f"WARNING: Matrix inverse check failed with relaxed tolerance (1e-2):")
+        print(f"WARNING: Matrix inverse check failed with relaxed tolerance (1e-3):")
         print(f"  Max error check1: {error1:.2e} (check passed: {check1})")
         print(f"  Max error check2: {error2:.2e} (check passed: {check2})")
         print(f"  Matrix conditioning may be poor. Proceeding with caution.")

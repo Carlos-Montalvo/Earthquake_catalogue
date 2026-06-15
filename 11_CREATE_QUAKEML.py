@@ -199,7 +199,9 @@ def merge_quakeml_files(input_dir, output_file):
     
 def nll_quakeml_to_csv_split(quakeml_file, output_dir,
                             station_xml="/Volumes/GeoPhysics_49/users-data/montalca/STATIONS/ALL_STATIONS.xml",
-                            taup_model="/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz"):
+                            taup_model_path="/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel_offset.npz",
+                            surface_offset_km=15.0):   # <-- offset del modelo
+    
     from obspy.geodetics import gps2dist_azimuth
     from obspy.taup import TauPyModel
     from obspy import read_inventory
@@ -209,18 +211,19 @@ def nll_quakeml_to_csv_split(quakeml_file, output_dir,
     catalog = read_events(quakeml_file)
     print(f">>> Eventos cargados: {len(catalog)}")
 
-    # Cargar inventario y modelo UNA sola vez fuera del loop
     print(f">>> Cargando inventario: {station_xml}")
     inventory = read_inventory(station_xml)
-    # taup_model = TauPyModel(model="iasp91")
 
-    # Construir lookup dict: station_code -> (lat, lon)
+    print(f">>> Cargando modelo TauPy: {taup_model_path}")
+    taup_model = TauPyModel(taup_model_path)
+
     station_coords = {}
     for net in inventory:
         for sta in net:
             station_coords[sta.code] = (sta.latitude, sta.longitude)
     print(f">>> Estaciones cargadas: {len(station_coords)}")
 
+    taup_cache = {}
     event_records = []
     phase_records = []
 
@@ -260,59 +263,81 @@ def nll_quakeml_to_csv_split(quakeml_file, output_dir,
         }
         event_records.append(event_record)
 
-        # Lookup arrivals por pick_id
         arrival_lookup = {str(a.pick_id): a for a in origin.arrivals}
-
         dep_km = origin.depth / 1000.0 if origin.depth is not None else 0.0
 
         for pick in event.picks:
             if pick.waveform_id is None:
                 continue
 
-            sta_code  = pick.waveform_id.station_code
+            sta_code   = pick.waveform_id.station_code
+            network    = pick.waveform_id.network_code
             phase_type = pick.phase_hint if pick.phase_hint else None
             polarity   = str(pick.polarity) if pick.polarity else None
+            pick_time  = pick.time.isoformat() if pick.time else None
 
-            # Distance desde arrival (en grados)
-            arrival = arrival_lookup.get(str(pick.resource_id))
+            arrival  = arrival_lookup.get(str(pick.resource_id))
             distance = arrival.distance if arrival and arrival.distance is not None else None
+            
+            # DIAGNÓSTICO — quitar después
+            if phase_type in ('P', 'S') and len(event_records) <= 1:  # solo primer evento
+                arrival_key = str(pick.resource_id)
+                print(f"  [{sta_code}] phase={phase_type} | pick_id={arrival_key[:60]} | "
+                      f"arrival_found={arrival is not None} | distance={distance}")
+                if len(arrival_lookup) > 0:
+                    sample_key = list(arrival_lookup.keys())[0]
+                    print(f"    Ejemplo key en lookup : {sample_key[:60]}")
+                    print(f"    pick.resource_id      : {str(pick.resource_id)[:60]}")
 
-            # Azimuth: evento -> estación
+            # Azimuth evento -> estación
             azimuth = None
             sta_coords = station_coords.get(sta_code)
-            if sta_coords and origin.latitude is not None and origin.longitude is not None:
+            if sta_coords and origin.latitude is not None:
                 _, az, _ = gps2dist_azimuth(
                     origin.latitude, origin.longitude,
-                    sta_coords[0],   sta_coords[1]
+                    sta_coords[0], sta_coords[1]
                 )
                 azimuth = round(az, 4)
 
-            # Takeoff angle via TauPy
+            # Takeoff via TauPy con cache
             takeoff = None
-            if distance is not None and phase_type in ('P', 'S'):
-                try:
-                    ray_paths = taup_model.get_ray_paths(
-                        source_depth_in_km=dep_km,
-                        distance_in_degree=distance,
-                        phase_list=[phase_type]
-                    )
-                    takeoff = round(ray_paths[0].takeoff_angle, 4) if ray_paths else None
-                except Exception:
-                    takeoff = None
+            if distance is not None and phase_type in ('P', 'Pg', 'Pn'):
+                taup_depth = dep_km + surface_offset_km
+                cache_key = (round(taup_depth, 1), round(distance, 3), 'P')  # cache unificado por 'P'
 
-            pick_time = pick.time.isoformat() if pick.time else None
+                if cache_key not in taup_cache:
+                    try:
+                        ray_paths = taup_model.get_ray_paths(
+                            source_depth_in_km=taup_depth,
+                            distance_in_degree=distance,
+                            phase_list=['P', 'Pg', 'Pn']  # todas las fases P regionales
+                        )
+                        if ray_paths:
+                            first_arrival = min(ray_paths, key=lambda r: r.time)
+                            taup_cache[cache_key] = round(first_arrival.takeoff_angle, 4)
+                        else:
+                            print(f"  TauPy 0 rays [{sta_code}] dep={taup_depth:.1f} dist={distance:.4f}")
+                            taup_cache[cache_key] = None
+                    except Exception as e:
+                        print(f"  TauPy ERROR ({sta_code}, dist={distance:.4f}, taup_depth={taup_depth:.1f}): {e}")
+                        taup_cache[cache_key] = None
+                takeoff = taup_cache[cache_key]
+
+            # ptime/stime según fase
+            ptime = pick_time if phase_type == 'P' else None
+            stime = pick_time if phase_type == 'S' else None
+
             phase_record = {
                 'event_id': event_id,
+                'network':  network,
                 'sta':      sta_code,
                 'phase':    phase_type,
                 'polarity': polarity,
                 'distance': distance,
                 'azimuth':  azimuth,
                 'takeoff':  takeoff,
-                'network':  pick.waveform_id.network_code if pick.waveform_id else None,
-                'channel':  pick.waveform_id.channel_code if pick.waveform_id else None,
-                'ptime':    pick_time if phase_type == 'P' else None,
-                'stime':    pick_time if phase_type == 'S' else None,
+                'ptime':    ptime,
+                'stime':    stime,
             }
             phase_records.append(phase_record)
 
@@ -325,6 +350,8 @@ def nll_quakeml_to_csv_split(quakeml_file, output_dir,
     print(f"✓ Event catalog saved: {event_csv_path} ({len(df_events)} events)")
 
     df_phases = pd.DataFrame(phase_records)
+    cols = ['event_id', 'network', 'sta', 'phase', 'polarity', 'distance', 'azimuth', 'takeoff', 'ptime', 'stime']
+    df_phases = df_phases[cols]
     phase_csv_path = join(output_dir, 'phase_catalogue.csv')
     df_phases.to_csv(phase_csv_path, index=False)
     print(f"✓ Phase catalog saved: {phase_csv_path} ({len(df_phases)} picks)")
@@ -338,6 +365,8 @@ mag_dir = join(ctlg_dir,'MAGNITUDES')
 amp_dir = join(mag_dir,'AMPLITUDES')
 rpnet_dir = join(ctlg_dir, 'RPNET')
 gn_file = join(ctlg_dir,'GeoNet_CMT_solutions_corregido.csv')
+
+start_code = datetime.now()
 
 # Flags: mode = 1 for merging QuakeML files, mode = 2 for converting GeoNet CSV to QuakeML, mode = 3 for splitting QuakeML to CSV
 mode = 3
@@ -353,3 +382,6 @@ elif mode == 3:
         df_events, df_phases = nll_quakeml_to_csv_split(quakeml_input, rpnet_dir)
     else:
         print(f"QuakeML file not found: {quakeml_input}")
+
+end_code = datetime.now()
+print(f"Execution time: {end_code - start_code}")
