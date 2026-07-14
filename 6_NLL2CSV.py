@@ -3,428 +3,310 @@ import pandas as pd
 from os.path import join
 from datetime import datetime
 import os
-from obspy import UTCDateTime, read_inventory
-from obspy.core.event import Catalog, Event, Origin, Magnitude, OriginQuality, Pick, WaveformStreamID
+from obspy import UTCDateTime, read_inventory, read_events, Catalog
+from obspy.core.event import OriginUncertainty, QuantityError
 
-# Organizes stations by network from ObsPy inventory
+
 def organize_stations_by_network(inventory):
-    """
-    Extract and organize stations by network from ObsPy inventory.
-    Returns dictionaries with stations grouped by data format/location.
-    """
-    stations_by_network = {
-        'MORIA': [], 
-        'DPRI': [],
-        'GEONET': []
-        }
-    
+    stations_by_network = {'MORIA': [], 'DPRI': [], 'GEONET': []}
     for network in inventory:
         net_code = network.code
-        
         for station in network:
             sta_code = station.code
-            
-            # Classify stations based on network code and station patterns
             if net_code == '5L':
                 stations_by_network['MORIA'].append(sta_code)
             elif net_code == 'DP':
                 stations_by_network['DPRI'].append(sta_code)
             elif net_code == 'NZ':
                 stations_by_network['GEONET'].append(sta_code)
-    
     return stations_by_network
+
+
+def parse_nll_hyp_summary(hyp_path):
+    """
+    Lee GEOGRAPHIC, QUALITY, STATISTICS y QML_OriginUncertainty directo del
+    texto del .hyp, para tener todos los campos del catálogo CSV en las
+    unidades nativas de NLL (evita ambigüedades de unidades al pasar por
+    los objetos OriginQuality de ObsPy/QuakeML).
+    """
+    summary = {}
+    stats = {}
+    qml_unc = {}
+
+    with open(hyp_path, 'r') as fh:
+        for line in fh:
+            if line.startswith('QUALITY'):
+                parts = line.split()
+                if 'RMS' in parts:
+                    summary['rms'] = float(parts[parts.index('RMS') + 1])
+                if 'Nphs' in parts:
+                    summary['nphases'] = int(float(parts[parts.index('Nphs') + 1]))
+                if 'Gap' in parts:
+                    summary['gap'] = float(parts[parts.index('Gap') + 1])
+                if 'Dist' in parts:
+                    summary['dist_km'] = float(parts[parts.index('Dist') + 1])
+            elif line.startswith('STATISTICS'):
+                parts = line.split()
+                stats = dict(zip(parts[1::2], parts[2::2]))
+            elif line.startswith('QML_OriginUncertainty'):
+                parts = line.split()
+                qml_unc = dict(zip(parts[1::2], parts[2::2]))
+            elif line.startswith('PHASE ID'):
+                break
+
+    if 'ZZ' in stats:
+        try:
+            summary['vert_uncert_km'] = float(stats['ZZ']) ** 0.5
+        except (ValueError, TypeError):
+            pass
+
+    hor_unc = qml_unc.get('horUnc')
+    min_hor = qml_unc.get('minHorUnc')
+    max_hor = qml_unc.get('maxHorUnc')
+    try:
+        if hor_unc is not None and float(hor_unc) > 0:
+            summary['horz_uncert_km'] = float(hor_unc)
+        elif min_hor is not None and max_hor is not None:
+            summary['horz_uncert_km'] = (float(min_hor) * float(max_hor)) ** 0.5
+    except (ValueError, TypeError):
+        pass
+
+    return summary
+
+
+def parse_nll_phase_geometry(hyp_path):
+    """
+    Lee RAz (azimut del rayo en la fuente) directo de las líneas PHASE,
+    indexado por (estación, fase, hora del pick) para poder emparejar
+    con cada Pick/Arrival del objeto ObsPy.
+    """
+    geometry = {}
+    in_phase_block = False
+    with open(hyp_path, 'r') as fh:
+        for line in fh:
+            if line.startswith('PHASE ID'):
+                in_phase_block = True
+                continue
+            if line.startswith('END_PHASE'):
+                in_phase_block = False
+                continue
+            if in_phase_block and line.strip():
+                parts = line.split()
+                if len(parts) < 26:
+                    continue
+                sta = parts[0]
+                phase = parts[4]
+                pick_hrmn = parts[7]
+                pick_sec = parts[8]
+                r_az = float(parts[23])   # RAz
+                r_dip = float(parts[24])  # RDip (ya coincide con lo que da ObsPy)
+                key = (sta, phase, pick_hrmn, pick_sec)
+                geometry[key] = {'RAz': r_az, 'RDip': r_dip}
+    return geometry
+
 
 ### DIRECTORIES AND FILES ###
 basedir = r'/Volumes/GeoPhysics_49/users-data/montalca'
 out_dir = join(basedir, 'CATALOGS')
 nll_out = join(out_dir, 'NLL')
 nll_dir = join(basedir, 'NLL')
-hyp_files = glob.glob(join(nll_dir,'OUT_JAN25_SEP25/DATA_2025_*.loc.hyp'))
+hyp_files = glob.glob(join(nll_dir, 'OUT_JAN24_DEC24/DATA_2024_*.loc.hyp'))
 
-# Define geographic region filter [lon_min, lon_max, lat_min, lat_max]
+# Filtrar archivos vacíos o casi vacíos (residuos de corridas interrumpidas)
+valid_hyp_files = []
+n_empty_skipped = 0
+for f in hyp_files:
+    if os.path.getsize(f) == 0:
+        n_empty_skipped += 1
+        continue
+    valid_hyp_files.append(f)
+
+hyp_files = valid_hyp_files
+print(f"Archivos vacíos descartados: {n_empty_skipped}")
+print(f"Total archivos a procesar: {len(hyp_files)}")
+
 loc_region = [171, 176.6, -44.3, -39.3]
 print(f"Geographic filter applied: Longitude {loc_region[0]}° to {loc_region[1]}° E, Latitude {loc_region[2]}° to {loc_region[3]}° S")
 
-# Load station inventory and organize by network
-sta_dir = join(basedir,'STATIONS')
-inv = read_inventory(join(sta_dir,'nll_region_all_stations.xml'))
+sta_dir = join(basedir, 'STATIONS')
+inv = read_inventory(join(sta_dir, 'ALL_STATIONS.xml'))
 station_groups = organize_stations_by_network(inv)
+moria_stations = station_groups['MORIA']
+dpri_stations = station_groups['DPRI']
+geonet_stations = station_groups['GEONET']
 
-print(f"Loaded station inventory:")
-print(f"  MORIA stations: {len(station_groups['MORIA'])} (e.g., {', '.join(station_groups['MORIA'][:5])})")
-print(f"  DPRI stations: {len(station_groups['DPRI'])} (e.g., {', '.join(station_groups['DPRI'][:5])})")
-print(f"  GEONET stations: {len(station_groups['GEONET'])} (e.g., {', '.join(station_groups['GEONET'][:5])})")
-print(f"  Total stations: {sum(len(v) for v in station_groups.values())}")
-print()
+print("Loaded station inventory:")
+print(f"  MORIA: {len(moria_stations)}  DPRI: {len(dpri_stations)}  GEONET: {len(geonet_stations)}")
 
-### CONVERSION
-events = []
-event_dates = []  # Para almacenar todas las fechas de eventos
-events_outside_region = 0  # Contador de eventos fuera de la región
-
-for f in hyp_files:
-    with open(f) as fh:
-        ev = {"file": f}
-        picks = []  # Lista para almacenar los picks de este evento
-        reading_phases = False  # Flag para saber si estamos leyendo la sección de fases
-        skip_event = False  # Flag para saltar eventos fuera de la región
-        
-        for line in fh:
-            if line.startswith("GEOGRAPHIC"):
-                parts = line.split()
-                # OT 2022 01 11  21 25 8.768092
-                year, month, day = parts[2], parts[3], parts[4]
-                hour, minute, sec = parts[5], parts[6], parts[7]
-                ev["datetime"] = f"{year}-{month}-{day} {hour}:{minute}:{sec}"
-                ev["latitude"]  = float(parts[9])
-                ev["longitude"] = float(parts[11])
-                ev["depth_km"]  = float(parts[13])
-                
-                # Check if event is within the specified region
-                lat, lon = ev["latitude"], ev["longitude"]
-                if not (loc_region[0] <= lon <= loc_region[1] and loc_region[2] <= lat <= loc_region[3]):
-                    events_outside_region += 1
-                    # Mark event to be skipped
-                    skip_event = True
-                    break
-                
-                # Almacenar la fecha para determinar el rango temporal
-                event_date = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
-                event_dates.append(event_date)
-                
-            elif line.startswith("QUALITY"):
-                parts = line.split()
-                # RMS ... Nphs ... Gap ... Dist ...
-                if "RMS" in parts:
-                    ev["rms"] = float(parts[parts.index("RMS")+1])
-                if "Nphs" in parts:
-                    ev["nphases"] = int(float(parts[parts.index("Nphs")+1]))
-                if "Gap" in parts:
-                    ev["gap"] = float(parts[parts.index("Gap")+1])
-                if "Dist" in parts:
-                    ev["dist_km"] = float(parts[parts.index("Dist")+1])
-                    
-            elif line.startswith("PHASE ID"):
-                # Empezamos a leer la sección de fases
-                reading_phases = True
-                continue
-                
-            elif line.startswith("END_PHASE"):
-                # Terminamos de leer las fases
-                reading_phases = False
-                continue
-                
-            elif reading_phases and not line.strip() == "":
-                # Parsear línea de pick
-                try:
-                    parts = line.strip().split()
-                    if len(parts) >= 8:
-                        station = parts[0]
-                        phase = parts[4]
-                        # Fix: Assign appropriate default channel based on phase type
-                        if parts[2] != '?':
-                            channel = parts[2]
-                        else:
-                            # For P waves: use vertical channel (Z)
-                            # For S waves: use horizontal channel (E as default)
-                            if phase == 'P':
-                                channel = 'EHZ'  # Vertical for P waves
-                            elif phase == 'S':
-                                channel = 'EHE'  # Horizontal for S waves (will be refined later based on station type)
-                            else:
-                                channel = 'EHZ'  # Fallback
-                        pick_date = parts[6]
-                        pick_hrmn = parts[7]
-                        pick_sec = parts[8]
-                        
-                        # Construir tiempo del pick
-                        # pick_date formato: 20220115, pick_hrmn formato: 1955
-                        pick_year = pick_date[:4]
-                        pick_month = pick_date[4:6]
-                        pick_day = pick_date[6:8]
-                        pick_hour = pick_hrmn[:2]
-                        pick_minute = pick_hrmn[2:4]
-                        
-                        pick_datetime = f"{pick_year}-{pick_month}-{pick_day} {pick_hour}:{pick_minute}:{pick_sec}"
-                        
-                        pick_info = {
-                            'station': station,
-                            'channel': channel,
-                            'phase': phase,
-                            'datetime': pick_datetime
-                        }
-                        picks.append(pick_info)
-                except Exception as e:
-                    # Si hay error parseando el pick, continuar
-                    pass
-        
-        # Agregar picks al evento
-        ev["picks"] = picks
-        
-        # Only add event if it's within the region (skip_event flag not set)
-        if not skip_event:
-            events.append(ev)
-
-df = pd.DataFrame(events)
-
-print(f"\nRegion filtering results:")
-print(f"Events outside region [{loc_region[0]}, {loc_region[1]}, {loc_region[2]}, {loc_region[3]}]: {events_outside_region}")
-print(f"Events within region: {len(events)}")
-print(f"Total events processed: {len(events) + events_outside_region}")
-
-# Generar archivos XML por día
-print("\nGenerating daily XML files...")
-
-# Agrupar eventos por día
+### CONVERSION ###
 events_by_day = {}
-negative_time_count = 0  # Contador de eventos con tiempos negativos
-parsing_error_count = 0  # Contador de otros errores de parsing
-
-for event in events:
-    if 'datetime' in event:
-        # Manejar microsegundos en el formato de fecha
-        datetime_str = event['datetime']
-        
-        # Verificar si hay segundos negativos y corregir
-        if ':-' in datetime_str:
-            negative_time_count += 1
-            continue
-            
-        try:
-            # Intentar con microsegundos primero
-            event_dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S.%f")
-        except ValueError:
-            try:
-                # Si falla, intentar sin microsegundos
-                event_dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                parsing_error_count += 1
-                continue
-        
-        year = event_dt.strftime("%Y")
-        jday = event_dt.strftime("%j")  # Día juliano
-        day_key = f"{year}_{jday}"
-        
-        if day_key not in events_by_day:
-            events_by_day[day_key] = []
-        events_by_day[day_key].append(event)
-
-# Reportar estadísticas de parsing
-print(f"Events with negative time: {negative_time_count}")
-print(f"Events with parsing errors: {parsing_error_count}")
-print(f"Valid events processed: {len([e for day_events in events_by_day.values() for e in day_events])}")
-print(f"Total events in input: {len(events)}")
-print(f"Events passed to XML creation: {sum(len(day_events) for day_events in events_by_day.values())}")
-
-# Crear directorio por año si no existe
-xml_negative_time_count = 0  # Contador adicional para la fase de XML
-xml_parsing_error_count = 0
-
-# Contadores para fixes aplicados
+events_outside_region = 0
+n_parse_errors = 0
+n_missing_horz_uncert = 0
+n_missing_vert_uncert = 0
+n_geom_matched = 0
+n_geom_unmatched = 0
+n_missing_arrival_geom = 0
 network_fixes_count = 0
 channel_fixes_count = 0
 
+sanity_check_done = False
+
+event_records = []
+event_dates = []
+
+for f in hyp_files:
+    try:
+        cat = read_events(f)
+    except Exception as e:
+        print(f"  ERROR leyendo {f}: {e}")
+        n_parse_errors += 1
+        continue
+
+    summary = parse_nll_hyp_summary(f)
+    geom = parse_nll_phase_geometry(f)
+
+    for event in cat:
+        origin = event.preferred_origin() or (event.origins[0] if event.origins else None)
+        if origin is None or origin.latitude is None or origin.longitude is None:
+            continue
+
+        if not (loc_region[0] <= origin.longitude <= loc_region[1] and
+                loc_region[2] <= origin.latitude <= loc_region[3]):
+            events_outside_region += 1
+            continue
+
+        # --- FIX: horz/vert uncertainty leídos directo del .hyp ---
+        if 'horz_uncert_km' in summary:
+            if origin.origin_uncertainty is None:
+                origin.origin_uncertainty = OriginUncertainty()
+            origin.origin_uncertainty.horizontal_uncertainty = summary['horz_uncert_km'] * 1000.0
+        else:
+            n_missing_horz_uncert += 1
+
+        if 'vert_uncert_km' in summary:
+            origin.depth_errors = QuantityError(uncertainty=summary['vert_uncert_km'] * 1000.0)
+        else:
+            n_missing_vert_uncert += 1
+
+        if not sanity_check_done and origin.arrivals:
+            a0 = origin.arrivals[0]
+            print(f"\n[SANITY CHECK] {f}")
+            print(f"  Arrival azimuth={a0.azimuth}  takeoff_angle={a0.takeoff_angle}  distance(deg)={a0.distance}")
+            sanity_check_done = True
+
+        # --- Registro para el CSV del catálogo ---
+        event_id = str(event.resource_id).split('/')[-1]
+        event_dt = origin.time.datetime
+        event_dates.append(event_dt)
+        event_records.append({
+            'event_id':       event_id,
+            'file':           f,
+            'datetime':       origin.time.isoformat(),
+            'latitude':       origin.latitude,
+            'longitude':      origin.longitude,
+            'depth_km':       origin.depth / 1000.0 if origin.depth is not None else None,
+            'rms':            summary.get('rms'),
+            'nphases':        summary.get('nphases'),
+            'gap':            summary.get('gap'),
+            'dist_km':        summary.get('dist_km'),
+            'horz_uncert_km': summary.get('horz_uncert_km'),
+            'vert_uncert_km': summary.get('vert_uncert_km'),
+        })
+
+        arrival_lookup = {str(a.pick_id): a for a in origin.arrivals}
+
+        for pick in event.picks:
+            if pick.waveform_id is None:
+                continue
+            sta_code = pick.waveform_id.station_code
+            phase = pick.phase_hint
+
+            arrival = arrival_lookup.get(str(pick.resource_id))
+            if arrival is None or arrival.azimuth is None or arrival.takeoff_angle is None:
+                n_missing_arrival_geom += 1
+
+            if arrival is not None:
+                pick_hrmn = f"{pick.time.hour:02d}{pick.time.minute:02d}"
+                pick_sec = f"{pick.time.second + pick.time.microsecond / 1e6:.4f}"
+                key = (sta_code, phase, pick_hrmn, pick_sec)
+                if key in geom:
+                    arrival.azimuth = geom[key]['RAz']
+                    n_geom_matched += 1
+                else:
+                    n_geom_unmatched += 1
+
+            original_network = pick.waveform_id.network_code
+            if sta_code in moria_stations:
+                pick.waveform_id.network_code = '5L'
+            elif sta_code in dpri_stations or sta_code.startswith('DP'):
+                pick.waveform_id.network_code = 'DP'
+                if original_network != 'DP':
+                    network_fixes_count += 1
+            elif sta_code in geonet_stations:
+                pick.waveform_id.network_code = 'NZ'
+            else:
+                pick.waveform_id.network_code = 'NZ'
+
+            available_channels = []
+            for network in inv:
+                if network.code == pick.waveform_id.network_code:
+                    for sta in network:
+                        if sta.code == sta_code:
+                            available_channels = [ch.code for ch in sta.channels]
+                            break
+
+            original_channel = pick.waveform_id.channel_code
+            if sta_code in dpri_stations:
+                if phase == 'P':
+                    pick.waveform_id.channel_code = 'EHZ'
+                elif phase == 'S':
+                    pick.waveform_id.channel_code = 'EH1'
+                    if original_channel == 'EHZ':
+                        channel_fixes_count += 1
+            elif pick.waveform_id.network_code == 'NZ':
+                if phase == 'P':
+                    pick.waveform_id.channel_code = 'HHZ' if 'HHZ' in available_channels else (
+                        'EHZ' if 'EHZ' in available_channels else 'HHZ')
+                elif phase == 'S':
+                    pick.waveform_id.channel_code = 'HHE' if 'HHE' in available_channels else (
+                        'EHE' if 'EHE' in available_channels else 'HHE')
+                    if original_channel and original_channel.endswith('Z'):
+                        channel_fixes_count += 1
+
+        day_key = f"{event_dt.strftime('%Y')}_{event_dt.strftime('%j')}"
+        events_by_day.setdefault(day_key, []).append(event)
+
+print(f"\nEvents outside region: {events_outside_region}")
+print(f"Files with parse errors: {n_parse_errors}")
+print(f"Events missing horz_uncert_km: {n_missing_horz_uncert}")
+print(f"Events missing vert_uncert_km: {n_missing_vert_uncert}")
+print(f"Picks missing arrival azimuth/takeoff: {n_missing_arrival_geom}")
+print(f"Geometría RAz: {n_geom_matched} matched, {n_geom_unmatched} sin match (quedaron con SAzim)")
+print(f"Network fixes (->DP): {network_fixes_count}  Channel fixes: {channel_fixes_count}")
+
+# --- Escribir XML por día ---
 for day_key, day_events in events_by_day.items():
     year = day_key.split('_')[0]
     year_dir = join(nll_out, year)
-    
-    # Crear directorio del año si no existe
-    if not os.path.exists(year_dir):
-        os.makedirs(year_dir)
-        print(f"Created directory: {year_dir}")
-    
-    # Crear catálogo de ObsPy para el día
-    daily_catalog = Catalog()
-    
-    for event_data in day_events:
-        # Crear evento de ObsPy
-        event = Event()
-        
-        # Crear origen
-        origin = Origin()
-        # Manejar microsegundos en el tiempo de origen
-        datetime_str = event_data['datetime']
-        
-        # Verificar si hay segundos negativos y corregir
-        if ':-' in datetime_str:
-            xml_negative_time_count += 1
-            continue
-            
-        try:
-            # Intentar con microsegundos primero
-            origin.time = UTCDateTime(datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S.%f"))
-        except ValueError:
-            try:
-                # Si falla, intentar sin microsegundos
-                origin.time = UTCDateTime(datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S"))
-            except ValueError:
-                xml_parsing_error_count += 1
-                continue
-        
-        origin.latitude = event_data['latitude']
-        origin.longitude = event_data['longitude']
-        origin.depth = event_data['depth_km'] * 1000  # Convertir a metros
-        
-        # Inicializar OriginQuality
-        origin.quality = OriginQuality()
-        
-        # Agregar calidad si está disponible
-        if 'rms' in event_data:
-            origin.time_errors.uncertainty = event_data['rms']
-        if 'nphases' in event_data:
-            origin.quality.used_phase_count = event_data['nphases']
-        if 'gap' in event_data:
-            origin.quality.azimuthal_gap = event_data['gap']
-        if 'dist_km' in event_data:
-            origin.quality.minimum_distance = event_data['dist_km'] * 1000  # Convertir a metros
-        
-        # Agregar origen al evento
-        event.origins.append(origin)
-        event.preferred_origin_id = origin.resource_id
-        
-        # Agregar picks al evento
-        if 'picks' in event_data:
-            for pick_data in event_data['picks']:
-                try:
-                    # Crear pick de ObsPy
-                    pick = Pick()
-                    
-                    # Parsear tiempo del pick
-                    pick_datetime_str = pick_data['datetime']
-                    try:
-                        pick.time = UTCDateTime(datetime.strptime(pick_datetime_str, "%Y-%m-%d %H:%M:%S.%f"))
-                    except ValueError:
-                        try:
-                            pick.time = UTCDateTime(datetime.strptime(pick_datetime_str, "%Y-%m-%d %H:%M:%S"))
-                        except ValueError:
-                            continue  # Saltar pick si no se puede parsear el tiempo
-                    
-                    # Crear WaveformStreamID
-                    waveform_id = WaveformStreamID()
-                    waveform_id.station_code = pick_data['station']
-                    
-                    # Get station lists from inventory (loaded at startup)
-                    moria_stations = station_groups['MORIA']
-                    dpri_stations = station_groups['DPRI']
-                    geonet_stations = station_groups['GEONET']
-                    
-                    # Fix 1: Assign correct network code
-                    original_network = 'NZ'  # Default that would have been assigned
-                    if pick_data['station'] in moria_stations:
-                        waveform_id.network_code = '5L'
-                    elif pick_data['station'] in dpri_stations:
-                        waveform_id.network_code = 'DP'  # Correct network for DPRI stations
-                        if original_network != 'DP':
-                            network_fixes_count += 1
-                    elif pick_data['station'].startswith('DP'):
-                        waveform_id.network_code = 'DP'
-                    elif pick_data['station'] in geonet_stations:
-                        waveform_id.network_code = 'NZ'  # GeoNet stations
-                    else:
-                        waveform_id.network_code = 'NZ'  # Default fallback
-                    
-                    # Fix 2: Assign correct channel based on phase, station type, and inventory
-                    original_channel = pick_data['channel']
-                    station = pick_data['station']
-                    phase = pick_data['phase']
-                    
-                    # Get available channels from inventory for this station
-                    available_channels = []
-                    for network in inv:
-                        if network.code == waveform_id.network_code:
-                            for sta in network:
-                                if sta.code == station:
-                                    available_channels = [ch.code for ch in sta.channels]
-                                    break
-                    
-                    if station in dpri_stations:
-                        # DPRI stations: P->EHZ, S->EH1/EH2
-                        if phase == 'P':
-                            waveform_id.channel_code = 'EHZ'
-                        elif phase == 'S':
-                            # Use EH1 for S waves (horizontal component)
-                            waveform_id.channel_code = 'EH1'
-                            if original_channel == 'EHZ':  # S wave was on vertical channel
-                                channel_fixes_count += 1
-                        else:
-                            waveform_id.channel_code = original_channel
-                    elif waveform_id.network_code == 'NZ':
-                        # GeoNet stations: use channels based on what's available in inventory
-                        if phase == 'P':
-                            # For P waves, prefer vertical channels
-                            if 'HHZ' in available_channels:
-                                waveform_id.channel_code = 'HHZ'
-                            elif 'EHZ' in available_channels:
-                                waveform_id.channel_code = 'EHZ'
-                            else:
-                                waveform_id.channel_code = 'HHZ'  # Default fallback
-                        elif phase == 'S':
-                            # For S waves, prefer horizontal channels
-                            if 'HHE' in available_channels:
-                                waveform_id.channel_code = 'HHE'  # Broadband horizontal
-                            elif 'EHE' in available_channels:
-                                waveform_id.channel_code = 'EHE'  # Short period horizontal
-                            else:
-                                waveform_id.channel_code = 'HHE'  # Default fallback
-                            if original_channel.endswith('Z'):  # S wave was on vertical channel
-                                channel_fixes_count += 1
-                        else:
-                            waveform_id.channel_code = original_channel
-                    else:
-                        # Other networks: keep original channel
-                        waveform_id.channel_code = original_channel
-                    
-                    pick.waveform_id = waveform_id
-                    pick.phase_hint = pick_data['phase']
-                    
-                    # Agregar pick al evento
-                    event.picks.append(pick)
-                    
-                except Exception as e:
-                    # Si hay error creando el pick, continuar
-                    continue
-        
-        # Agregar evento al catálogo
-        daily_catalog.append(event)
-    
-    # Guardar archivo XML del día
-    xml_filename = f"{day_key}_nll.xml"
-    xml_path = join(year_dir, xml_filename)
+    os.makedirs(year_dir, exist_ok=True)
+    daily_catalog = Catalog(events=day_events)
+    xml_path = join(year_dir, f"{day_key}_nll.xml")
     daily_catalog.write(xml_path, format="QUAKEML")
-    
-    print(f"Saved {len(daily_catalog)} events to {xml_path}")
+    # print(f"Saved {len(daily_catalog)} events to {xml_path}")
 
-print(f"\nGenerated XML files for {len(events_by_day)} days")
-print(f"Additional events skipped during XML creation:")
-print(f"  - Events with negative time: {xml_negative_time_count}")
-print(f"  - Events with parsing errors: {xml_parsing_error_count}")
+# --- Escribir CSV del catálogo ---
+df = pd.DataFrame(event_records)
 
-print(f"\nFixes applied during XML creation:")
-print(f"  - Network code corrections (NZ->DP for DPRI stations): {network_fixes_count}")
-print(f"  - Channel corrections (S waves from Z to horizontal): {channel_fixes_count}")
-if network_fixes_count > 0 or channel_fixes_count > 0:
-    print("✅ Catalog files have been automatically corrected for cross-correlation compatibility!")
-
-df = pd.DataFrame(events)
-
-# Determinar el rango temporal de los eventos para el nombre del catálogo
 if event_dates:
     min_date = min(event_dates)
     max_date = max(event_dates)
-    
-    # Formatear el nombre del catálogo según el formato solicitado
-    YYYY = min_date.strftime("%Y")
-    SM = min_date.strftime("%m")
-    SD = min_date.strftime("%d")
-    EM = max_date.strftime("%m")
-    ED = max_date.strftime("%d")
-    
-    catalog_name = f'nll_catalog_{YYYY}_{SM}_{SD}_{EM}_{ED}.csv'
+    catalog_name = (f'nll_catalog_{min_date.strftime("%Y_%m_%d")}_'
+                     f'{max_date.strftime("%m_%d")}.csv')
 else:
-    # Usar nombre por defecto si no hay eventos
-    catalog_name = 'nll_catalog.csv'
+    catalog_name = 'nll_catalog_JAN25_SEP25.csv'
 
-catalog = f'{out_dir}/{catalog_name}'
-df.to_csv(catalog, index=False)
-print(f"Saved {len(df)} events to {catalog}")
-print(f"Catalog covers period from {min_date.strftime('%Y-%m-%d') if event_dates else 'N/A'} to {max_date.strftime('%Y-%m-%d') if event_dates else 'N/A'}")
+catalog_path = f'{out_dir}/{catalog_name}'
+df.to_csv(catalog_path, index=False)
+print(f"\nSaved {len(df)} events to {catalog_path}")
+print(f"Columns: {list(df.columns)}")
