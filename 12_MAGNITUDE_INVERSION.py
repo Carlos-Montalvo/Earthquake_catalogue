@@ -682,9 +682,9 @@ def magnitude_inversion(
     x_width = n_new_events + n_seed_ids + 1
     
     # OPTIMIZED: Use sparse.lil_matrix instead of np.zeros (99.97% of values are zero!)
-    # ORIGINAL CODE (COMMENTED OUT):
-    X = np.zeros((total_length, x_width), dtype=np.float64)
-    # X = sparse.lil_matrix((total_length, x_width), dtype=np.float32)
+    # # ORIGINAL CODE (COMMENTED OUT):
+    # X = np.zeros((total_length, x_width), dtype=np.float64)
+    X = sparse.lil_matrix((total_length, x_width), dtype=np.float32)
 
     # Fill with frequency * distance
     if frequency_dependent:
@@ -695,8 +695,8 @@ def magnitude_inversion(
     # OPTIMIZED: Assign row-by-row for sparse matrix efficiency
     # ORIGINAL (COMMENTED): 
     for row_idx in range(n_observations):
-        X[0:n_observations, n_new_events] = (1 / mag_data.period) * slantdist
-        # X[row_idx, n_new_events] = freq_dist[row_idx]
+        # X[0:n_observations, n_new_events] = (1 / mag_data.period) * slantdist
+        X[row_idx, n_new_events] = freq_dist[row_idx]
 
     # Convert to numpy arrays for faster indexing
     event_id_array = mag_data.event_id.to_numpy()
@@ -706,19 +706,19 @@ def magnitude_inversion(
     # OPTIMIZED: Use np.where for vectorized boolean indexing (100x faster)
     # ORIGINAL (COMMENTED):
     for i, used_event_id in enumerate(used_event_ids):
-        X[0:n_observations, i] = mag_data.event_id == used_event_id
-        # matches = np.where(event_id_array == used_event_id)[0]
-        # for row_idx in matches:
-        #     X[row_idx, i] = 1.0
+        # X[0:n_observations, i] = mag_data.event_id == used_event_id
+        matches = np.where(event_id_array == used_event_id)[0]
+        for row_idx in matches:
+            X[row_idx, i] = 1.0
 
     # Fill with ones where a seed id is used for that event.
     # OPTIMIZED: Use np.where for vectorized boolean indexing
     # ORIGINAL (COMMENTED):
     for i, seed_id in enumerate(used_seed_ids):
-        X[0:n_observations, n_new_events + i + 1] = mag_data.seed_id == seed_id
-        # matches = np.where(seed_id_array == seed_id)[0]
-        # for row_idx in matches:
-        #     X[row_idx, n_new_events + i + 1] = 1.0
+        # X[0:n_observations, n_new_events + i + 1] = mag_data.seed_id == seed_id
+        matches = np.where(seed_id_array == seed_id)[0]
+        for row_idx in matches:
+            X[row_idx, n_new_events + i + 1] = 1.0
 
     # Fill with ones where events are matched
     for j, callibration_id in enumerate(callibration_ids):
@@ -727,19 +727,19 @@ def magnitude_inversion(
                 comparison_events[used_event_id] == callibration_id:
                  X[n_observations + j, k] = magnitude_weight
     
-    # # OPTIMIZED: Convert sparse matrix to CSR (Compressed Sparse Row) format for efficient operations
-    # print(f"  Converting sparse matrix to dense for solver...")
-    # X_csr = X.tocsr()
-    # X = X_csr.toarray().astype(np.float64)  # Convert to dense for scipy.linalg functions
+    # OPTIMIZED: Convert sparse matrix to CSR (Compressed Sparse Row) format for efficient operations
+    print(f"  Converting sparse matrix to dense for solver...")
+    X_csr = X.tocsr()
+    X = X_csr.toarray().astype(np.float64)  # Convert to dense for scipy.linalg functions
     # print(f"  X matrix shape: {X.shape}, memory used: ~{X.nbytes / 1e9:.2f} GB (original was ~80 GB)")
     
-    # # OPTIMIZED: Free sparse matrix reference
-    # del X_csr
+    # OPTIMIZED: Free sparse matrix reference
+    del X_csr
     
-    # # OPTIMIZED: Clean up large temporary arrays to reduce memory pressure
-    # print(f"  Freeing temporary arrays from memory...")
-    # del event_id_array, seed_id_array, amplitudes, slantdist, freq_dist
-    # gc.collect()  # Force garbage collection immediately
+    # OPTIMIZED: Clean up large temporary arrays to reduce memory pressure
+    print(f"  Freeing temporary arrays from memory...")
+    del event_id_array, seed_id_array, amplitudes, slantdist, freq_dist
+    gc.collect()  # Force garbage collection immediately
 
     ################################# Solve ####################################
     print("########## Solving inversion ##########")

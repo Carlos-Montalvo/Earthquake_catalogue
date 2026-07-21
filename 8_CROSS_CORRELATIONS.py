@@ -15,7 +15,7 @@ from obspy import *
 from eqcorrscan import *
 from eqcorrscan.core import *
 # Import the modified version instead of original eqcorrscan.utils
-sys.path.append('/Volumes/GeoPhysics_49/users-data/montalca/PROGRAMS/PYTHON')
+sys.path.append('/Volumes/GeoPhysics_49/users-data/montalca/PROGRAMS/PYTHON/EARTHQUAKE_CATALOGUE')
 import catalog_to_dd_edited_SK as catalog_to_dd
 
 # Configure logging
@@ -246,7 +246,7 @@ if setup_required:
             matched += 1
         else:
             unmatched += 1
-    
+
     print(f"✓ {matched}/{len(cat)} events re-matched to streams by resource_id")
     stream_dict = resource_stream_dict
     

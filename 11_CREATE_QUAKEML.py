@@ -199,9 +199,9 @@ def merge_quakeml_files(input_dir, output_file):
     
 def nll_quakeml_to_csv_split(quakeml_file, output_dir,
                             station_xml="/Volumes/GeoPhysics_49/users-data/montalca/STATIONS/ALL_STATIONS.xml",
-                            taup_model_path="/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel_offset.npz",
-                            surface_offset_km=15.0):   # <-- offset del modelo
-    
+                            taup_model_path="/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz",
+                            surface_offset_km=0):   # <-- offset del modelo (se mantiene por compatibilidad, ya no se usa para takeoff)
+
     from obspy.geodetics import gps2dist_azimuth
     from obspy.taup import TauPyModel
     from obspy import read_inventory
@@ -214,7 +214,9 @@ def nll_quakeml_to_csv_split(quakeml_file, output_dir,
     print(f">>> Cargando inventario: {station_xml}")
     inventory = read_inventory(station_xml)
 
-    print(f">>> Cargando modelo TauPy: {taup_model_path}")
+    # Ya no se usa TauPy para takeoff (ahora viene de NLL), se deja cargado
+    # por si se necesita como fallback en el futuro.
+    print(f">>> Cargando modelo TauPy (solo fallback): {taup_model_path}")
     taup_model = TauPyModel(taup_model_path)
 
     station_coords = {}
@@ -223,9 +225,13 @@ def nll_quakeml_to_csv_split(quakeml_file, output_dir,
             station_coords[sta.code] = (sta.latitude, sta.longitude)
     print(f">>> Estaciones cargadas: {len(station_coords)}")
 
-    taup_cache = {}
     event_records = []
     phase_records = []
+
+    n_missing_horz = 0
+    n_missing_vert = 0
+    n_missing_takeoff = 0
+    n_missing_azimuth = 0
 
     for event in catalog:
         origin = event.preferred_origin() or (event.origins[0] if event.origins else None)
@@ -251,20 +257,36 @@ def nll_quakeml_to_csv_split(quakeml_file, output_dir,
         event_id = str(event.resource_id).split('/')[-1]
         data_id = f"{origin.time.year}_{origin.time.julday:03d}_{origin.time.hour:02d}{origin.time.minute:02d}{origin.time.second:02d}"
 
+        # --- FIX: incertidumbre horizontal/vertical de NLL ---
+        # origin_uncertainty.horizontal_uncertainty viene en metros (elipse de confianza de NLL)
+        horz_uncert_km = None
+        if origin.origin_uncertainty is not None and origin.origin_uncertainty.horizontal_uncertainty is not None:
+            horz_uncert_km = round(origin.origin_uncertainty.horizontal_uncertainty / 1000.0, 4)
+        else:
+            n_missing_horz += 1
+
+        # depth_errors.uncertainty viene en metros
+        vert_uncert_km = None
+        if origin.depth_errors is not None and origin.depth_errors.uncertainty is not None:
+            vert_uncert_km = round(origin.depth_errors.uncertainty / 1000.0, 4)
+        else:
+            n_missing_vert += 1
+
         event_record = {
-            'event_id': event_id,
-            'data_id':  data_id,
-            'jst':      origin.time.isoformat() if origin.time else None,
-            'lat':      origin.latitude,
-            'lon':      origin.longitude,
-            'dep':      origin.depth / 1000.0 if origin.depth is not None else None,
-            'mag':      mag1.mag if mag1 else None,
-            'tmag':     mag1.magnitude_type if mag1 else None,
+            'event_id':        event_id,
+            'data_id':         data_id,
+            'jst':             origin.time.isoformat() if origin.time else None,
+            'lat':             origin.latitude,
+            'lon':             origin.longitude,
+            'dep':             origin.depth / 1000.0 if origin.depth is not None else None,
+            'mag':             mag1.mag if mag1 else None,
+            'tmag':            mag1.magnitude_type if mag1 else None,
+            'horz_uncert_km':  horz_uncert_km,
+            'vert_uncert_km':  vert_uncert_km,
         }
         event_records.append(event_record)
 
         arrival_lookup = {str(a.pick_id): a for a in origin.arrivals}
-        dep_km = origin.depth / 1000.0 if origin.depth is not None else 0.0
 
         for pick in event.picks:
             if pick.waveform_id is None:
@@ -276,70 +298,75 @@ def nll_quakeml_to_csv_split(quakeml_file, output_dir,
             polarity   = str(pick.polarity) if pick.polarity else None
             pick_time  = pick.time.isoformat() if pick.time else None
 
-            arrival  = arrival_lookup.get(str(pick.resource_id))
-            distance = arrival.distance if arrival and arrival.distance is not None else None
-            
+            arrival = arrival_lookup.get(str(pick.resource_id))
+
             # DIAGNÓSTICO — quitar después
-            if phase_type in ('P', 'S') and len(event_records) <= 1:  # solo primer evento
+            if phase_type in ('P', 'S') and len(event_records) <= 1:
                 arrival_key = str(pick.resource_id)
                 print(f"  [{sta_code}] phase={phase_type} | pick_id={arrival_key[:60]} | "
-                      f"arrival_found={arrival is not None} | distance={distance}")
-                if len(arrival_lookup) > 0:
-                    sample_key = list(arrival_lookup.keys())[0]
-                    print(f"    Ejemplo key en lookup : {sample_key[:60]}")
-                    print(f"    pick.resource_id      : {str(pick.resource_id)[:60]}")
+                      f"arrival_found={arrival is not None}")
 
-            # Azimuth evento -> estación
+            # --- FIX: azimuth y takeoff angle directo de NLL (arrival), no recalculados ---
             azimuth = None
+            azimuth_uncert_deg = None
+            takeoff = None
+            takeoff_uncert_deg = None
+
+            if arrival is not None:
+                if arrival.azimuth is not None:
+                    azimuth = round(arrival.azimuth, 4)
+                else:
+                    n_missing_azimuth += 1
+
+                if arrival.azimuth_errors is not None and arrival.azimuth_errors.uncertainty is not None:
+                    azimuth_uncert_deg = round(arrival.azimuth_errors.uncertainty, 4)
+
+                if arrival.takeoff_angle is not None:
+                    takeoff = round(arrival.takeoff_angle, 4)
+                else:
+                    n_missing_takeoff += 1
+
+                if arrival.takeoff_angle_errors is not None and arrival.takeoff_angle_errors.uncertainty is not None:
+                    takeoff_uncert_deg = round(arrival.takeoff_angle_errors.uncertainty, 4)
+            else:
+                n_missing_azimuth += 1
+                n_missing_takeoff += 1
+
+            # --- FIX: distancia en km, calculada geodésicamente (independiente del ---
+            # --- 'distance' en grados que trae el QuakeML, más consistente para SKHASH) ---
+            distance_km = None
             sta_coords = station_coords.get(sta_code)
             if sta_coords and origin.latitude is not None:
-                _, az, _ = gps2dist_azimuth(
+                dist_m, _, _ = gps2dist_azimuth(
                     origin.latitude, origin.longitude,
                     sta_coords[0], sta_coords[1]
                 )
-                azimuth = round(az, 4)
-
-            # Takeoff via TauPy con cache
-            takeoff = None
-            if distance is not None and phase_type in ('P', 'Pg', 'Pn'):
-                taup_depth = dep_km + surface_offset_km
-                cache_key = (round(taup_depth, 1), round(distance, 3), 'P')  # cache unificado por 'P'
-
-                if cache_key not in taup_cache:
-                    try:
-                        ray_paths = taup_model.get_ray_paths(
-                            source_depth_in_km=taup_depth,
-                            distance_in_degree=distance,
-                            phase_list=['P', 'Pg', 'Pn']  # todas las fases P regionales
-                        )
-                        if ray_paths:
-                            first_arrival = min(ray_paths, key=lambda r: r.time)
-                            taup_cache[cache_key] = round(first_arrival.takeoff_angle, 4)
-                        else:
-                            print(f"  TauPy 0 rays [{sta_code}] dep={taup_depth:.1f} dist={distance:.4f}")
-                            taup_cache[cache_key] = None
-                    except Exception as e:
-                        print(f"  TauPy ERROR ({sta_code}, dist={distance:.4f}, taup_depth={taup_depth:.1f}): {e}")
-                        taup_cache[cache_key] = None
-                takeoff = taup_cache[cache_key]
+                distance_km = round(dist_m / 1000.0, 4)
 
             # ptime/stime según fase
             ptime = pick_time if phase_type == 'P' else None
             stime = pick_time if phase_type == 'S' else None
 
             phase_record = {
-                'event_id': event_id,
-                'network':  network,
-                'sta':      sta_code,
-                'phase':    phase_type,
-                'polarity': polarity,
-                'distance': distance,
-                'azimuth':  azimuth,
-                'takeoff':  takeoff,
-                'ptime':    ptime,
-                'stime':    stime,
+                'event_id':            event_id,
+                'network':             network,
+                'sta':                 sta_code,
+                'phase':               phase_type,
+                'polarity':            polarity,
+                'distance_km':         distance_km,
+                'azimuth':             azimuth,
+                'azimuth_uncert_deg':  azimuth_uncert_deg,
+                'takeoff':             takeoff,
+                'takeoff_uncert_deg':  takeoff_uncert_deg,
+                'ptime':               ptime,
+                'stime':               stime,
             }
             phase_records.append(phase_record)
+
+    print(f">>> Eventos sin horz_uncert_km: {n_missing_horz}")
+    print(f">>> Eventos sin vert_uncert_km: {n_missing_vert}")
+    print(f">>> Picks sin azimuth de NLL: {n_missing_azimuth}")
+    print(f">>> Picks sin takeoff de NLL: {n_missing_takeoff}")
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -350,7 +377,8 @@ def nll_quakeml_to_csv_split(quakeml_file, output_dir,
     print(f"✓ Event catalog saved: {event_csv_path} ({len(df_events)} events)")
 
     df_phases = pd.DataFrame(phase_records)
-    cols = ['event_id', 'network', 'sta', 'phase', 'polarity', 'distance', 'azimuth', 'takeoff', 'ptime', 'stime']
+    cols = ['event_id', 'network', 'sta', 'phase', 'polarity', 'distance_km',
+            'azimuth', 'azimuth_uncert_deg', 'takeoff', 'takeoff_uncert_deg', 'ptime', 'stime']
     df_phases = df_phases[cols]
     phase_csv_path = join(output_dir, 'phase_catalogue.csv')
     df_phases.to_csv(phase_csv_path, index=False)
@@ -369,7 +397,7 @@ gn_file = join(ctlg_dir,'GeoNet_CMT_solutions_corregido.csv')
 start_code = datetime.now()
 
 # Flags: mode = 1 for merging QuakeML files, mode = 2 for converting GeoNet CSV to QuakeML, mode = 3 for splitting QuakeML to CSV
-mode = 3
+mode = 1
 
 if mode == 1:
     merge_quakeml_files(amp_dir, join(mag_dir, 'JAN24_SEP25.xml'))

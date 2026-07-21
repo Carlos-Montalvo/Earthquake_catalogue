@@ -8,8 +8,8 @@
 # =============================================================================
 
 # Time period parameters (YYYY-MM-DD format)
-START_DATE="2024-01-01"
-END_DATE="2024-12-31"  # Adjust date range as needed
+START_DATE="2025-01-01"
+END_DATE="2025-09-30"  # Adjust date range as needed
 
 # Directory parameters
 BASEDIR="/Volumes/GeoPhysics_49/users-data/montalca"

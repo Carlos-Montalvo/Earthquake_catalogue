@@ -170,6 +170,9 @@ for f in hyp_files:
         origin = event.preferred_origin() or (event.origins[0] if event.origins else None)
         if origin is None or origin.latitude is None or origin.longitude is None:
             continue
+        
+        if len(event.picks) == 0 or summary.get('nphases', 0) == 0:
+            continue
 
         if not (loc_region[0] <= origin.longitude <= loc_region[1] and
                 loc_region[2] <= origin.latitude <= loc_region[3]):

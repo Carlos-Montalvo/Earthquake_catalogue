@@ -9,7 +9,7 @@
 # =============================================================================
 
 # Time period parameters (YYYY-MM-DD format)
-START_DATE="2025-01-01"
+START_DATE="2024-02-01"
 END_DATE="2025-09-30"  # Adjust date range as needed
 
 # Directory parameters
