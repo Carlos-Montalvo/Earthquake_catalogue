@@ -654,7 +654,7 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                       taup_model='/Volumes/GeoPhysics_49/users-data/montalca/VEL_MODEL/transition_zone_vmodel.npz'):
     """
     Corta ventanas desde p_time - pre_p hasta s_time + post_s por estación para RPNet.
-    Incluye componente vertical (Z) y mejor horizontal para ratio S/P.
+    Incluye componente vertical (Z) y ambas horizontales.
     Usa estrategia GrowClust: busca en el Stream ya cargado por estación.
     Guarda un mseed por estación en rpnet_output_dir/YYYY_JDD_HHMMSS/STATION.mseed
     
@@ -707,7 +707,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
         'other_error': 0
     }
 
-    # Contadores para saber qué modelo produjo la estimación (npz vs fallbacks)
     failure_reasons.update({
         'p_estimated_npz': 0,
         'p_estimated_ak135': 0,
@@ -729,9 +728,7 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
     
     print(f'  Using pre-loaded stream with {len(st_day)} traces')
     
-    # Iterar sobre cada evento en el catálogo
     for event in cat:
-        # Obtener origen del evento
         try:
             origin = event.preferred_origin() or event.origins[0]
             event_lat = origin.latitude
@@ -740,8 +737,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
         except Exception:
             continue
 
-        
-        # Agrupar picks P y S por estación
         p_picks = {}
         s_picks = {}
         for pick in event.picks:
@@ -750,14 +745,13 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                 p_picks[sta] = pick
             elif pick.phase_hint == 'S':
                 s_picks[sta] = pick
-
-        # Obtener tiempo de origen para nombre de archivos: YYYY_JDD_HHMMSS
+        print(f'  DEBUG {file_prefix if "file_prefix" in dir() else ""}: event.picks={len(event.picks)}, p_picks={len(p_picks)}, s_picks={len(s_picks)}')
+        
         try:
             origin_time = event.preferred_origin().time or event.origins[0].time
         except AttributeError:
             origin_time = min([pick.time for pick in event.picks])
 
-        # Crear directorio de salida para este evento con formato YYYY_JDD_HHMMSS
         time_str = f"{origin_time.hour:02d}{origin_time.minute:02d}{origin_time.second:02d}"
         file_prefix = f"{year_str}_{jday_str}_{time_str}"
         event_out_dir = join(rpnet_output_dir, file_prefix)
@@ -768,7 +762,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
         stations_failed = 0
         failed_stations_detail = []
 
-        # Contadores locales por evento para saber qué modelo produjo estimaciones
         evt_model_counters = {
             'p_estimated_npz': 0,
             'p_estimated_ak135': 0,
@@ -780,7 +773,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
             's_estimated_other': 0,
         }
 
-        # Recopilar todas las estaciones que tienen picks (P y/o S)
         all_picks_stations = set(p_picks.keys()) | set(s_picks.keys())
 
         for sta in sorted(all_picks_stations):
@@ -790,12 +782,11 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
             if not any([in_moria, in_dpri, in_geonet]):
                 print(f'    WARNING: {sta} not in any station group')
         
-        # Iterar sobre cada estación con picks para este evento
         for sta in sorted(all_picks_stations):
             p_estimated = False
             s_estimated = False
             try:
-                # Obtener información de inventario de la estación
+                # Inventario
                 try:
                     sta_inv = inv.select(station=sta)[0][0]
                     sta_lat = sta_inv.latitude
@@ -808,20 +799,11 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                     failed_stations_detail.append((sta, 'no_inventory'))
                     continue
 
-                # # Filtrar estaciones por distancia epicentral (máximo 200 km)
-                # distance_km = epicentral_distance_km(event_lat, event_lon, sta_lat, sta_lon)
-                # MAX_DISTANCE_KM = 500.0
-                # if distance_km > MAX_DISTANCE_KM:
-                #     failure_reasons['distance_out_of_range'] += 1
-                #     stations_failed += 1
-                #     continue
-
-                # Obtener tiempo de P (pick o estimado)
+                # Tiempo P
                 if sta in p_picks:
                     p_time = p_picks[sta].time
                     p_model = None
                 else:
-                    # Estimar P si no existe
                     try:
                         p_time, p_model = estimate_p_time(origin_time, event_lat, event_lon, event_dep_km,
                                                            sta_lat, sta_lon, sta_elv, model=taup_model)
@@ -836,7 +818,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                         failed_stations_detail.append((sta, 'no_p_estimate'))
                         continue
                     p_estimated = True
-                    # Registrar qué modelo produjo la estimación
                     try:
                         pm = str(p_model)
                         if 'npz' in pm:
@@ -854,12 +835,11 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                     except Exception:
                         failure_reasons['p_estimated_other'] += 1
 
-                # Obtener tiempo S
+                # Tiempo S
                 if sta in s_picks:
                     s_time = s_picks[sta].time
                     s_model = None
                 else:
-                    # Estimar S si no existe
                     s_time, s_model = estimate_s_time(origin_time, event_lat, event_lon, event_dep_km,
                                                       sta_lat, sta_lon, sta_elv, model=taup_model)
                     if s_time is None:
@@ -868,7 +848,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                         failed_stations_detail.append((sta, 'no_s_estimate'))
                         continue
                     s_estimated = True
-                    # Registrar qué modelo produjo la estimación
                     try:
                         sm = str(s_model)
                         if 'npz' in sm:
@@ -890,15 +869,11 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                 endtime = s_time + post_s
 
                 # ===== BUSCAR DATOS EN EL STREAM O LEER BAJO DEMANDA =====
-                # Primero intentar obtener del Stream cargado
                 st_sta = st_day.select(station=sta).copy()
                 
-                # Necesitamos al menos trazas con datos válidos
                 has_valid_data = any(len(tr.data) > 1 and (tr.stats.endtime - tr.stats.starttime) > 0.1 for tr in st_sta)
                 
                 if len(st_sta) == 0 or not has_valid_data:
-                    
-                    # Determinar qué red es esta estación
                     if sta in MORIA:
                         net_label = 'MORIA'
                     elif sta in DPRI:
@@ -910,7 +885,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                         stations_failed += 1
                         continue
                     
-                    # Leer archivos para esta estación
                     from glob import glob
                     pattern = join('/Volumes/GeoPhysics_49/users-data/montalca/DATA', f'{year_str}/{net_label}/{sta}/*{year_str}.{jday_str}')
                     data_files = glob(pattern)
@@ -925,13 +899,9 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                     for file_path in data_files:
                         try:
                             st_tmp = read(file_path)
-                            # NO trimear aquí - solo combinar todos los archivos del día
-                            # Esto es importante cuando los archivos están particionados
                             if len(st_tmp) > 0:
                                 st_sta += st_tmp
-                        except Exception as e:
-                            pass
-                        except Exception as e:
+                        except Exception:
                             pass
                 
                 if len(st_sta) == 0:
@@ -940,7 +910,7 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                     failed_stations_detail.append((sta, 'no_traces'))
                     continue
 
-                # --- Componente vertical ---
+                # ===== COMPONENTE VERTICAL =====
                 if sta in DPRI:
                     z_channels = ['EHZ']
                 elif sta in MORIA:
@@ -957,7 +927,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                         valid_traces = Stream()
                         for tr in traces:
                             duration = tr.stats.endtime - tr.stats.starttime
-                            # Filtrar trazas corruptas (duración <= 0.1s o sin datos)
                             if duration <= 0.1 or len(tr.data) <= 1:
                                 continue
                             valid_traces += tr
@@ -965,7 +934,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                             z_trace += valid_traces
                             break
                 
-                # Si HHZ falló, intentar con canales alternativos (HH1, HH2, etc.)
                 if len(z_trace) == 0:
                     alt_z_channels = ['HH1', 'HH2', 'EH1', 'EH2']
                     for ch_code in alt_z_channels:
@@ -976,10 +944,7 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                                 z_trace += traces
                                 break
                 
-                # Si aún no hay datos Z, hacer fallback a lectura directa
                 if len(z_trace) == 0:
-                    
-                    # Determinar qué red es esta estación
                     if sta in MORIA:
                         net_label = 'MORIA'
                     elif sta in DPRI:
@@ -991,7 +956,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                         st_sta.clear()
                         continue
                     
-                    # Leer archivos para esta estación
                     from glob import glob
                     year_str = str(int(year)).zfill(4)
                     jday_str = str(int(jday)).zfill(3)
@@ -1003,13 +967,11 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                         for file_path in data_files:
                             try:
                                 st_tmp = read(file_path)
-                                # NO trimear aquí - combinar todos los archivos primero
                                 if len(st_tmp) > 0:
                                     st_fallback += st_tmp
                             except Exception:
                                 pass
                         
-                        # Intentar seleccionar canales del fallback
                         if len(st_fallback) > 0:
                             for ch_code in z_channels + alt_z_channels:
                                 traces = st_fallback.select(station=sta, channel=ch_code).copy()
@@ -1026,7 +988,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                     st_sta.clear()
                     continue
 
-                # DEBUG: ver cobertura ANTES del trim
                 z_time_start = min(tr.stats.starttime for tr in z_trace)
                 z_time_end = max(tr.stats.endtime for tr in z_trace)
                 if (starttime < z_time_start) or (endtime > z_time_end):
@@ -1037,8 +998,7 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                 z_trace = z_trace.trim(starttime=starttime, endtime=endtime)
                 
                 if len(z_trace) == 0:
-                    # DEBUG: ver qué estaba en z_trace antes del trim
-                    print(f'    DEBUG {sta}: trim_failed after trim. Before trim: check data availability')
+                    print(f'    DEBUG {sta}: trim_failed after trim.')
                     print(f'      Requested: {starttime} to {endtime}')
                     failure_reasons['trim_failed'] += 1
                     stations_failed += 1
@@ -1047,16 +1007,8 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                     continue
 
                 z_trace.merge(method=1, fill_value=0)
-                # COMENTADO: Restricción muy estricta del 30% - permitir formas de onda incompletas
-                # min_samples = int((endtime - starttime) * z_trace[0].stats.sampling_rate * 0.3)
-                # actual_samples = len(z_trace[0].data)
-                # if actual_samples < min_samples:
-                #     failure_reasons['z_incomplete'] += 1
-                #     stations_failed += 1
-                #     st_sta.clear()
-                #     continue
 
-                # --- Mejor componente horizontal (para ratio S/P) ---
+                # ===== COMPONENTES HORIZONTALES (AMBAS) =====
                 if sta in DPRI:
                     horizontal_channels = ['EH1', 'EH2', 'EHE', 'EHN']
                 elif sta in GEONET:
@@ -1066,14 +1018,12 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                 else:
                     horizontal_channels = ['HHE', 'HHN', 'HH1', 'HH2', 'EHE', 'EHN', 'EH1', 'EH2']
 
-                best_h_trace = None
-                best_score = 0
-                best_critical_completeness = 0
+                h_traces = Stream()  # Acumula todas las horizontales válidas
 
                 for ch_code in horizontal_channels:
                     try:
                         ch_inv = inv.select(station=sta, channel=ch_code,
-                                           starttime=starttime, endtime=endtime)
+                                            starttime=starttime, endtime=endtime)
                         if len(ch_inv) == 0:
                             continue
 
@@ -1083,49 +1033,20 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
 
                         windowed_trace = test_trace.trim(starttime=starttime, endtime=endtime)
                         if len(windowed_trace) == 0:
+                            windowed_trace.clear()
+                            test_trace.clear()
                             continue
 
                         trace = windowed_trace[0]
-                        sr = trace.stats.sampling_rate
-                        expected_samples = int((endtime - starttime) * sr)
-                        actual_samples = len(trace.data)
-                        if expected_samples == 0:
+                        if len(trace.data) <= 1:
+                            windowed_trace.clear()
+                            test_trace.clear()
                             continue
 
-                        # Criterio primario: ventana crítica ±0.5s alrededor del pick S
-                        critical_half = 0.5
-                        s_offset = p_time - starttime + (s_time - p_time)
-                        critical_start_idx = max(0, int((s_offset - critical_half) * sr))
-                        critical_end_idx = min(actual_samples, int((s_offset + critical_half) * sr))
-                        critical_samples = critical_end_idx - critical_start_idx
-                        expected_critical = int(2 * critical_half * sr)
-                        critical_completeness = critical_samples / expected_critical if expected_critical > 0 else 0
-
-                        # COMENTADO: Criterios muy estrictos para horizontal
-                        # critical_gaps = [g for g in windowed_trace.get_gaps()
-                        #                 if g[4] < s_time + critical_half
-                        #                 and g[5] > s_time - critical_half]
-                        #
-                        # if critical_completeness < 0.9 or len(critical_gaps) > 0:
-                        #     windowed_trace.clear()
-                        #     del windowed_trace
-                        #     continue
-
-                        # Criterio secundario: calidad de toda la traza
-                        completeness = actual_samples / expected_samples
-                        gap_penalty = len(windowed_trace.get_gaps()) * 0.1
-                        secondary_score = completeness - gap_penalty
-
-                        is_better = (critical_completeness > best_critical_completeness or
-                                    (critical_completeness == best_critical_completeness and
-                                     secondary_score > best_score))
-
-                        if is_better:
-                            best_score = secondary_score
-                            best_critical_completeness = critical_completeness
-                            if best_h_trace is not None:
-                                best_h_trace.clear()
-                            best_h_trace = windowed_trace.copy()
+                        # Evitar duplicar canales ya añadidos
+                        already_added = any(tr.stats.channel == ch_code for tr in h_traces)
+                        if not already_added:
+                            h_traces += windowed_trace.copy()
 
                         windowed_trace.clear()
                         del windowed_trace
@@ -1135,15 +1056,13 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                     except Exception:
                         continue
 
-                # Combinar vertical + horizontal y guardar
+                # ===== COMBINAR Y GUARDAR =====
                 sta_st = z_trace.copy()
-                if best_h_trace is not None:
-                    sta_st += best_h_trace
-                    best_h_trace.clear()
-                    del best_h_trace
-                # Si no hay horizontal, guardamos solo Z (más permisivo)
+                if len(h_traces) > 0:
+                    sta_st += h_traces
+                    h_traces.clear()
+                # Si no hay horizontales, se guarda solo Z
 
-                # Guardar mseed con formato STATION.mseed en subdirectorio del evento
                 out_file = join(event_out_dir, f'{sta}.mseed')
                 sta_st.write(out_file, format='MSEED')
                 stations_written += 1
@@ -1163,7 +1082,6 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
         total_stations_no_s += stations_no_s
         total_stations_failed += stations_failed
         
-        # Mostrar detalles de estaciones fallidas (solo las primeras 10)
         if len(failed_stations_detail) > 0:
             print(f'  Event {file_prefix}: {stations_written} stations written, '
                   f'{stations_no_s} S estimated, {stations_failed} failed')
@@ -1171,31 +1089,37 @@ def cut_rpnet_streams(cat, st_day, inv, station_groups, rpnet_output_dir, jday, 
                 print(f'    FAILED {sta}: {reason}')
             if len(failed_stations_detail) > 10:
                 print(f'    ... and {len(failed_stations_detail) - 10} more')
-        # Mostrar resumen de qué modelo produjo estimaciones P/S en este evento
-        try:
-            any_p = (evt_model_counters['p_estimated_npz'] + evt_model_counters['p_estimated_ak135'] +
-                     evt_model_counters['p_estimated_iaspei91'] + evt_model_counters['p_estimated_other'])
-            any_s = (evt_model_counters['s_estimated_npz'] + evt_model_counters['s_estimated_ak135'] +
-                     evt_model_counters['s_estimated_iaspei91'] + evt_model_counters['s_estimated_other'])
-            if any_p > 0:
-                print(f"    P estimates by model: npz={evt_model_counters['p_estimated_npz']}, ak135={evt_model_counters['p_estimated_ak135']}, iaspei91={evt_model_counters['p_estimated_iaspei91']}, other={evt_model_counters['p_estimated_other']}")
-            if any_s > 0:
-                print(f"    S estimates by model: npz={evt_model_counters['s_estimated_npz']}, ak135={evt_model_counters['s_estimated_ak135']}, iaspei91={evt_model_counters['s_estimated_iaspei91']}, other={evt_model_counters['s_estimated_other']}")
-        except Exception:
-            pass
+            try:
+                any_p = sum(evt_model_counters[k] for k in evt_model_counters if k.startswith('p_'))
+                any_s = sum(evt_model_counters[k] for k in evt_model_counters if k.startswith('s_'))
+                if any_p > 0:
+                    print(f"    P estimates by model: npz={evt_model_counters['p_estimated_npz']}, "
+                          f"ak135={evt_model_counters['p_estimated_ak135']}, "
+                          f"iaspei91={evt_model_counters['p_estimated_iasp91']}, "
+                          f"other={evt_model_counters['p_estimated_other']}")
+                if any_s > 0:
+                    print(f"    S estimates by model: npz={evt_model_counters['s_estimated_npz']}, "
+                          f"ak135={evt_model_counters['s_estimated_ak135']}, "
+                          f"iaspei91={evt_model_counters['s_estimated_iasp91']}, "
+                          f"other={evt_model_counters['s_estimated_other']}")
+            except Exception:
+                pass
         else:
             print(f'  Event {file_prefix}: {stations_written} stations written, '
                   f'{stations_no_s} S estimated, {stations_failed} failed')
-            # Mostrar resumen de modelos también en caso de no fallos listados
             try:
-                any_p = (evt_model_counters['p_estimated_npz'] + evt_model_counters['p_estimated_ak135'] +
-                         evt_model_counters['p_estimated_iaspei91'] + evt_model_counters['p_estimated_other'])
-                any_s = (evt_model_counters['s_estimated_npz'] + evt_model_counters['s_estimated_ak135'] +
-                         evt_model_counters['s_estimated_iaspei91'] + evt_model_counters['s_estimated_other'])
+                any_p = sum(evt_model_counters[k] for k in evt_model_counters if k.startswith('p_'))
+                any_s = sum(evt_model_counters[k] for k in evt_model_counters if k.startswith('s_'))
                 if any_p > 0:
-                    print(f"    P estimates by model: npz={evt_model_counters['p_estimated_npz']}, ak135={evt_model_counters['p_estimated_ak135']}, iaspei91={evt_model_counters['p_estimated_iaspei91']}, other={evt_model_counters['p_estimated_other']}")
+                    print(f"    P estimates by model: npz={evt_model_counters['p_estimated_npz']}, "
+                          f"ak135={evt_model_counters['p_estimated_ak135']}, "
+                          f"iaspei91={evt_model_counters['p_estimated_iasp91']}, "
+                          f"other={evt_model_counters['p_estimated_other']}")
                 if any_s > 0:
-                    print(f"    S estimates by model: npz={evt_model_counters['s_estimated_npz']}, ak135={evt_model_counters['s_estimated_ak135']}, iaspei91={evt_model_counters['s_estimated_iaspei91']}, other={evt_model_counters['s_estimated_other']}")
+                    print(f"    S estimates by model: npz={evt_model_counters['s_estimated_npz']}, "
+                          f"ak135={evt_model_counters['s_estimated_ak135']}, "
+                          f"iaspei91={evt_model_counters['s_estimated_iasp91']}, "
+                          f"other={evt_model_counters['s_estimated_other']}")
             except Exception:
                 pass
 
@@ -1241,6 +1165,8 @@ def process_single_day(jday, year, yearpath, nll_dir, inv, region,
     # Filtrar eventos por región y calidad antes de procesarlos
     events_to_process = []
     for event in cat:
+        if len(event.picks) == 0:
+            continue
         if not (region[2] < event.origins[0].latitude < region[3] and
                 region[0] < event.origins[0].longitude < region[1]):
             continue
@@ -1250,10 +1176,25 @@ def process_single_day(jday, year, yearpath, nll_dir, inv, region,
             continue
 
         # Verificar si el evento ya fue procesado (con cobertura completa)
-        if event_already_processed(event, rpnet_output_dir, station_groups=station_groups, min_coverage=100):
+        # if event_already_processed(event, rpnet_output_dir, station_groups=station_groups, min_coverage=75):
+        #     continue
+        # print(f'  DEBUG append: picks={len(event.picks)}')
+        if event_already_processed(event, streams_output_dir, station_groups=station_groups, min_coverage=75):
             continue
 
         events_to_process.append(event)
+
+    n_total = len(cat)
+    n_region = sum(1 for e in cat 
+                   if (region[2] < e.origins[0].latitude < region[3] and
+                       region[0] < e.origins[0].longitude < region[1]))
+    n_depth_ok = sum(1 for e in cat 
+                     if (region[2] < e.origins[0].latitude < region[3] and
+                         region[0] < e.origins[0].longitude < region[1]) and
+                        (e.origins[0].depth_errors is None or 
+                         e.origins[0].depth_errors.uncertainty is None or
+                         e.origins[0].depth_errors.uncertainty < 1000000))
+    print(f'Day {jday}: {n_total} total → {n_region} in region → {n_depth_ok} depth OK → {len(events_to_process)} to process')
 
     print(f'Day {jday}: Processing {len(events_to_process)} valid events')
 
@@ -1267,12 +1208,27 @@ def process_single_day(jday, year, yearpath, nll_dir, inv, region,
     picks_lost_no_time_window = 0
     s_waves_optimized = 0
 
+    # from collections import Counter
+    # pick_counts = Counter()
+    # for i, event in enumerate(cat):
+    #     n = len(event.picks)
+    #     pick_counts[n] += 1
+    #     if n == 0:
+    #         try:
+    #             ot = event.preferred_origin().time
+    #         except Exception:
+    #             ot = None
+    #         print(f'  Event {i}: resource_id={event.resource_id}, picks=0, origin_time={ot}, n_origins={len(event.origins)}')
+    
+    # print(pick_counts)
+
     # Crear catálogo con solo los eventos a procesar
     cat_filtered = Catalog(events_to_process)
+    # print(f'  DEBUG cat_filtered: n={len(cat_filtered)}, picks_event0={len(cat_filtered.events[0].picks) if len(cat_filtered)>0 else "NA"}')
 
     # === RPNet: procesa el catálogo completo usando el Stream ya cargado ===
-    rpnet_stats = cut_rpnet_streams(cat_filtered, st, inv, station_groups, rpnet_output_dir, 
-                                    jday, year)
+    # rpnet_stats = cut_rpnet_streams(cat_filtered, st, inv, station_groups, rpnet_output_dir, 
+    #                                 jday, year)
 
     # === GrowClust: procesa cada evento y guarda streams en pickle ===
     for event in events_to_process:
@@ -1289,9 +1245,16 @@ def process_single_day(jday, year, yearpath, nll_dir, inv, region,
                 except:
                     origin_time = min([pick.time for pick in event.picks])
                 
+                try:
+                    origin_time = event.preferred_origin().time or event.origins[0].time
+                except:
+                    origin_time = min([pick.time for pick in event.picks])
+
                 event_key = f"{origin_time.year}_{origin_time.julday:03d}_{origin_time.hour:02d}{origin_time.minute:02d}{origin_time.second:02d}"
                 stream_dict[event_key] = st_event
-                
+                # event_key = str(event.resource_id)
+                # stream_dict[event_key] = st_event
+
                 # Acumular estadísticas
                 total_picks_valid += gc_stats['valid_picks']
                 picks_lost_no_channel += gc_stats['picks_lost_no_channel']
@@ -1308,16 +1271,41 @@ def process_single_day(jday, year, yearpath, nll_dir, inv, region,
                         print(f"      Pick time: {lost_pick['pick_time']}")
                         print(f"      Trim window: {lost_pick['trim_window']}")
                         print(f"      Available traces: {lost_pick['available_traces']}")
+        # except Exception as e:
+        #     continue
         except Exception as e:
+            import traceback
+            print(f'  ERROR event {event.resource_id}: {e}')
+            traceback.print_exc()
             continue
-    
+
     # Guardar streams en pickle
+    # if len(stream_dict) > 0:
+    #     os.makedirs(streams_output_dir, exist_ok=True)
+    #     with open(streams_file, 'wb') as f:
+    #         pickle.dump(stream_dict, f)
+    #     print(f'Day {jday}: Saved {len(stream_dict)} GrowClust event streams to {streams_file}')
+    # Guardar streams en pickle (merge con existentes si el archivo ya existe)
     if len(stream_dict) > 0:
         os.makedirs(streams_output_dir, exist_ok=True)
+        
+        # Cargar pickle existente si existe
+        existing_streams = {}
+        if exists(streams_file):
+            try:
+                with open(streams_file, 'rb') as f:
+                    existing_streams = pickle.load(f)
+                print(f'Day {jday}: Loaded {len(existing_streams)} existing streams from pickle')
+            except Exception as e:
+                print(f'Day {jday}: Could not load existing pickle: {e}')
+        
+        # Merge: los nuevos streams tienen prioridad sobre los existentes
+        existing_streams.update(stream_dict)
+        
         with open(streams_file, 'wb') as f:
-            pickle.dump(stream_dict, f)
-        print(f'Day {jday}: Saved {len(stream_dict)} GrowClust event streams to {streams_file}')
-    
+            pickle.dump(existing_streams, f)
+        print(f'Day {jday}: Saved {len(existing_streams)} total streams ({len(stream_dict)} new) to {streams_file}')
+
     # Limpiar memoria
     cat.clear()
     st.clear()
@@ -1337,10 +1325,10 @@ def process_single_day(jday, year, yearpath, nll_dir, inv, region,
         'picks_lost_no_data': picks_lost_no_data,
         'picks_lost_no_time_window': picks_lost_no_time_window,
         's_waves_optimized': s_waves_optimized,
-        'rpnet_stations_written': rpnet_stats['stations_written'],
-        'rpnet_stations_no_s': rpnet_stats['stations_no_s'],
-        'rpnet_stations_failed': rpnet_stats['stations_failed'],
-        'failure_reasons': rpnet_stats.get('failure_reasons', {}),
+        # 'rpnet_stations_written': rpnet_stats['stations_written'],
+        # 'rpnet_stations_no_s': rpnet_stats['stations_no_s'],
+        # 'rpnet_stations_failed': rpnet_stats['stations_failed'],
+        # 'failure_reasons': rpnet_stats.get('failure_reasons', {}),
         'success': True
     }
 
@@ -1352,7 +1340,8 @@ def main():
     parser.add_argument('--basedir', type=str, required=True)
     parser.add_argument('--datadir', type=str, required=True)
     parser.add_argument('--region', type=float, nargs=4,
-                        default=[171.2, 176.1, -43.8, -39.3])
+                        default= [171.2,176.1,-43.8,-39.3])
+                        # default=[171.2, 176.1, -43.8, -39.3])
     parser.add_argument('--taup_model', type=str,
                     default='/Volumes/GeoPhysics_49/users-data/montalca/CATALOGS/VEL_MODEL/transition_zone_vmodel.npz',
                     help='Path to TauPy velocity model (.npz)')
