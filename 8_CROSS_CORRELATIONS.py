@@ -41,6 +41,13 @@ def dates(s_date,e_date):
     time_period = ((tperiod,jperiod))
     return time_period,year,sm,sd,em,ed
 
+def get_event_key(event):
+    try:
+        origin_time = event.preferred_origin().time or event.origins[0].time
+    except:
+        origin_time = min([pick.time for pick in event.picks])
+    return f"{origin_time.year}_{origin_time.julday:03d}_{origin_time.hour:02d}{origin_time.minute:02d}{origin_time.second:02d}"
+
 def combine_daily_catalogs_and_streams(nll_dir, streams_dir, time_period, year):
     """
     Combine daily XML catalogs and pickle streams into single objects for correlation processing.
@@ -81,10 +88,20 @@ def combine_daily_catalogs_and_streams(nll_dir, streams_dir, time_period, year):
     print(f"✓ Loaded {successful_days}/{len(time_period[1])} days | {len(combined_catalog)} events | {len(combined_stream_dict)} streams")
     if failed_days:
         print(f"✗ Failed days: {failed_days}")
-    
-    # Check for mismatch between catalog and streams
-    catalog_event_ids = set(str(event.resource_id) for event in combined_catalog)
+
+    def get_event_key(event):
+        try:
+            origin_time = event.preferred_origin().time or event.origins[0].time
+        except:
+            origin_time = min([pick.time for pick in event.picks])
+        return f"{origin_time.year}_{origin_time.julday:03d}_{origin_time.hour:02d}{origin_time.minute:02d}{origin_time.second:02d}"
+
+    catalog_event_ids = set(get_event_key(event) for event in combined_catalog)
     stream_event_ids = set(combined_stream_dict.keys())
+
+    # # Check for mismatch between catalog and streams
+    # catalog_event_ids = set(str(event.resource_id) for event in combined_catalog)
+    # stream_event_ids = set(combined_stream_dict.keys())
     
     missing_streams = catalog_event_ids - stream_event_ids
     extra_streams = stream_event_ids - catalog_event_ids
@@ -94,6 +111,51 @@ def combine_daily_catalogs_and_streams(nll_dir, streams_dir, time_period, year):
     if extra_streams:
         print(f"⚠ {len(extra_streams)} streams have no corresponding events")
     
+    # --- DIAGNÓSTICO DE EVENT IDs ---
+
+    # Toma muestras de cada lado
+    catalog_ids_sample = [str(get_event_key(event)) for event in combined_catalog[:5]]
+    stream_ids_sample = list(combined_stream_dict.keys())[:5]
+    
+    print("\n--- IDs del catálogo (XML) ---")
+    for cid in catalog_ids_sample:
+        print(repr(cid))
+    
+    print("\n--- IDs de los streams (pickle) ---")
+    for sid in stream_ids_sample:
+        print(repr(sid))
+    
+    # Compara longitudes y estructura
+    print("\n--- Estructura ---")
+    print(f"Tipo catalog id: {type(catalog_ids_sample[0])}, len: {len(catalog_ids_sample[0])}")
+    print(f"Tipo stream id: {type(stream_ids_sample[0])}, len: {len(stream_ids_sample[0])}")
+    
+    # Intenta ver si uno está contenido en el otro (substring)
+    test_cat_id = catalog_ids_sample[0]
+    matches = [sid for sid in combined_stream_dict.keys() if sid in test_cat_id or test_cat_id in sid]
+    print(f"\n¿Algún stream id es substring (o viceversa) del primer catalog id?")
+    print(matches[:3] if matches else "Ninguno encontrado")
+    
+    # Revisa si el problema es un prefijo tipo 'smi:local/' o 'quakeml:'
+    import re
+    prefixes_cat = set(re.match(r'^[a-zA-Z]+:[^/]*/?', cid).group(0) if re.match(r'^[a-zA-Z]+:[^/]*/?', cid) else 'NONE' for cid in catalog_ids_sample)
+    print(f"\nPrefijos detectados en catalog ids: {prefixes_cat}")
+
+    # ¿Los streams huérfanos son de días específicos o dispersos?
+    orphan_ids = stream_event_ids - catalog_event_ids
+    orphan_days = {}
+    for sid in orphan_ids:
+        # Buscar en qué pickle vive este stream
+        for jday in time_period[1]:
+            streams_file = join(streams_dir, f'{year}_{jday}.p')
+            if exists(streams_file):
+                with open(streams_file, 'rb') as fp:
+                    d = pickle.load(fp)
+                if sid in d:
+                    orphan_days[sid] = jday
+                    break
+    print(f"Orphan streams por día: {set(orphan_days.values())}")
+
     return combined_catalog, combined_stream_dict
 
 # ------------------------------------------------------------------------------
@@ -110,7 +172,7 @@ streams_dir = join(growclust_dir,'STREAMS')
 corrdir = join(growclust_dir,'CORRELATIONS')
 # Stations
 sta_dir = join(basedir,'STATIONS')
-inv = read_inventory(join(sta_dir,'nll_region_all_stations.xml'))
+inv = read_inventory(join(sta_dir,'ALL_STATIONS.xml'))
 
 print('Directory structure: basedir/datadir/year/stations/data')
 print('')
@@ -173,6 +235,20 @@ if setup_required:
     
     # Combine daily catalogs and streams
     cat, stream_dict = combine_daily_catalogs_and_streams(nll_dir, streams_dir, time_period, year)
+
+    # Re-indexar streams por resource_id (estable mientras cat esté en memoria)
+    resource_stream_dict = {}
+    matched, unmatched = 0, 0
+    for event in cat:
+        key = get_event_key(event)
+        if key in stream_dict:
+            resource_stream_dict[str(event.resource_id)] = stream_dict[key]
+            matched += 1
+        else:
+            unmatched += 1
+    
+    print(f"✓ {matched}/{len(cat)} events re-matched to streams by resource_id")
+    stream_dict = resource_stream_dict
     
     if len(cat) == 0:
         print("ERROR: No events found!")
