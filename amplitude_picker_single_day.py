@@ -205,9 +205,18 @@ def amp_pick_event(event, st, inventory, chans=('Z',), var_wintype=True,
                 tr = tr.split().detrend('simple').merge(fill_value=0)[0]
                 tr.filter('bandpass', freqmin=lowcut, freqmax=highcut,
                           corners=corners)
-            tr = _sim_WA(tr, inventory, water_level=water_level,
-                         velocity=velocity)
-            if tr is None:  # None returned when no matching response is found
+            # tr = _sim_WA(tr, inventory, water_level=water_level,
+            #              velocity=velocity)
+            # if tr is None:  # None returned when no matching response is found
+            #     continue
+            try:
+                tr = _sim_WA(tr, inventory, water_level=water_level,
+                             velocity=velocity)
+            except Exception as e:
+                Logger.warning(f"No response for {sta} {chan}, skipping: {e}")
+                continue
+            if tr is None:
+                Logger.warning(f"No matching response for {sta} {chan}, skipping")
                 continue
 
             # Get the distance from an appropriate arrival
