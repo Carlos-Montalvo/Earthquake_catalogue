@@ -104,13 +104,61 @@ def parse_nll_phase_geometry(hyp_path):
                 geometry[key] = {'RAz': r_az, 'RDip': r_dip}
     return geometry
 
+from obspy.geodetics import gps2dist_azimuth
+
+def deduplicate_events(events, time_tol=2.0, dist_tol_km=5.0):
+    """
+    Agrupa eventos cuyo origin.time cae dentro de time_tol segundos Y cuya
+    distancia epicentral es <= dist_tol_km del último evento del grupo.
+    Se queda con el de más picks P/S (desempate: menor RMS).
+    """
+    events_sorted = sorted(
+        events, key=lambda e: (e.preferred_origin() or e.origins[0]).time)
+
+    groups = []
+    for evt in events_sorted:
+        o = evt.preferred_origin() or evt.origins[0]
+        placed = False
+        for group in groups:
+            g_origin = group[-1].preferred_origin() or group[-1].origins[0]
+            dt = abs(o.time - g_origin.time)
+            if dt > time_tol:
+                continue
+            dist_m, _, _ = gps2dist_azimuth(
+                o.latitude, o.longitude, g_origin.latitude, g_origin.longitude)
+            if (dist_m / 1000.0) <= dist_tol_km:
+                group.append(evt)
+                placed = True
+                break
+        if not placed:
+            groups.append([evt])
+
+    deduped = []
+    n_removed = 0
+    for group in groups:
+        if len(group) == 1:
+            deduped.append(group[0])
+            continue
+        n_removed += len(group) - 1
+
+        def sort_key(e):
+            o = e.preferred_origin() or e.origins[0]
+            n_picks = len([p for p in e.picks
+                           if p.phase_hint and p.phase_hint[0].upper() in ("P", "S")])
+            rms = o.quality.standard_error if o.quality and o.quality.standard_error else float('inf')
+            return (-n_picks, rms)
+
+        best = sorted(group, key=sort_key)[0]
+        deduped.append(best)
+
+    return deduped, n_removed
 
 ### DIRECTORIES AND FILES ###
 basedir = r'/Volumes/GeoPhysics_49/users-data/montalca'
 out_dir = join(basedir, 'CATALOGS')
 nll_out = join(out_dir, 'NLL')
 nll_dir = join(basedir, 'NLL')
-hyp_files = glob.glob(join(nll_dir, 'OUT_JAN24_DEC24/DATA_2024_*.loc.hyp'))
+hyp_files = glob.glob(join(nll_dir, 'OUT_JAN25_SEP25/DATA_2025_*.loc.hyp'))
 
 # Filtrar archivos vacíos o casi vacíos (residuos de corridas interrumpidas)
 valid_hyp_files = []
@@ -288,18 +336,26 @@ print(f"Picks missing arrival azimuth/takeoff: {n_missing_arrival_geom}")
 print(f"Geometría RAz: {n_geom_matched} matched, {n_geom_unmatched} sin match (quedaron con SAzim)")
 print(f"Network fixes (->DP): {network_fixes_count}  Channel fixes: {channel_fixes_count}")
 
-# --- Escribir XML por día ---
+# --- Escribir XML por día y quedarnos con los event_id sobrevivientes ---
+total_dedup_removed = 0
+kept_event_ids = set()
 for day_key, day_events in events_by_day.items():
+    deduped_events, n_removed = deduplicate_events(day_events, time_tol=2.0, dist_tol_km=5.0)
+    total_dedup_removed += n_removed
+    kept_event_ids.update(str(e.resource_id).split('/')[-1] for e in deduped_events)
+
     year = day_key.split('_')[0]
     year_dir = join(nll_out, year)
     os.makedirs(year_dir, exist_ok=True)
-    daily_catalog = Catalog(events=day_events)
+    daily_catalog = Catalog(events=deduped_events)
     xml_path = join(year_dir, f"{day_key}_nll.xml")
     daily_catalog.write(xml_path, format="QUAKEML")
-    # print(f"Saved {len(daily_catalog)} events to {xml_path}")
 
-# --- Escribir CSV del catálogo ---
+print(f"Duplicados eliminados por proximidad temporal/espacial: {total_dedup_removed}")
+
+# --- Escribir CSV del catálogo, solo eventos deduplicados ---
 df = pd.DataFrame(event_records)
+df = df[df['event_id'].isin(kept_event_ids)].reset_index(drop=True)
 
 if event_dates:
     min_date = min(event_dates)
